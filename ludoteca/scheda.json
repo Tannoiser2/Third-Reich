@@ -1,0 +1,10 @@
+{
+  "titolo": "Third Reich",
+  "sottotitolo": "Rise and Decline e Advanced Third Reich",
+  "descrizione": "Il classico Avalon Hill sulla seconda guerra mondiale in Europa: BRP, opzioni offensive e di logoramento, sfondamenti dei corazzati, Barbarossa e Pearl Harbor. Si sceglie la versione base o l'Advanced (diplomazia, inverno russo, petrolio, guerra strategica). Mappa 3D con le pedine originali, IA per il solitario, online con gli amici e salvataggi su Firebase.",
+  "online": true,
+  "sezione": "conversione",
+  "ordine": 199,
+  "bgg": 1563,
+  "generi": ["Wargame", "Storici"]
+}

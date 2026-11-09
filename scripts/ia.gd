@@ -108,7 +108,8 @@ func _dichiarazioni() -> Dictionary:
 					voglio.append_array(["DAN", "NOR", "NED", "BEL", "LUX"])
 				if t >= 1941 * 4 + 0:
 					voglio.append_array(["JUG", "GRE"])
-				if t >= 1941 * 4 + 1 and brp >= 35 + 15 and _pronti_a_est():
+				# Barbarossa: dall'estate 1941, quando a est c'è una forza adeguata; comunque prima che attacchi l'URSS (1942)
+				if t >= 1941 * 4 + 1 and brp >= 35 + 15 and (_pronti_a_est() or t >= 1941 * 4 + 3):
 					voglio.append("URSS")
 			"ITA":
 				if t >= 1940 * 4 + 1 or m.s["pot"]["FRA"]["arresa"]:
@@ -179,30 +180,26 @@ func _opzione(p: String) -> Dictionary:
 	if contatto:
 		return {"t": "opz", "p": p, "o": "log"}
 	# territori nemici da raggiungere: offensiva se ci sono unità vicine al confine e BRP abbondanti
-	if brp >= costo + 30 and m.offensiva_permessa(p) and _vicini_al_nemico(p):
+	var margine := 10 if m.lato(p) == "asse" or int(m.s["anno"]) >= 1942 else 30
+	if brp >= costo + margine and m.offensiva_permessa(p) and _vicini_al_nemico(p):
 		return {"t": "opz", "p": p, "o": "off"}
 	return {"t": "opz", "p": p, "o": "pas"}
 
+## pronti per Barbarossa: forze tedesche e alleate vicine al confine sovietico almeno pari al 70% di quelle sovietiche
 func _pronti_a_est() -> bool:
-	var vicini := 0
-	var tot := 0
+	var d_est := _distanza_da(["URSS"])
+	var d_asse := _distanza_da(["GER", "ITA", "HUN", "RUM", "FIN", "BUL"])
+	var asse := 0
+	var sov := 0
 	for uid in m.s["u"]:
 		var u: Dictionary = m.s["u"][uid]
-		if m.lato(u["n"]) != "asse" or not Motore._terrestre(u["t"]):
+		if not Motore._terrestre(u["t"]) or u["h"] == "USA":
 			continue
-		tot += m.forza(uid)
-		var vicino := false
-		for v in D.esagoni[u["h"]]["vicini"]:
-			if m.controllo(v) == "URSS":
-				vicino = true
-		if not vicino:
-			for v in D.esagoni[u["h"]]["vicini"]:
-				for w in D.esagoni[v]["vicini"]:
-					if m.controllo(w) == "URSS":
-						vicino = true
-		if vicino:
-			vicini += m.forza(uid)
-	return tot > 0 and vicini * 2 >= tot
+		if m.lato(u["n"]) == "asse" and int(d_est.get(u["h"], 99)) <= 3:
+			asse += m.forza(uid)
+		elif u["n"] == "URSS" and int(d_asse.get(u["h"], 99)) <= 4:
+			sov += m.forza(uid)
+	return asse >= 20 and float(asse) >= float(sov) * 0.7
 
 func _vicini_al_nemico(p: String) -> bool:
 	var f := _distanza_fronte(m.lato(p))
@@ -223,18 +220,10 @@ func _distanza_fronte(l: String) -> Dictionary:
 		return _fronte
 	var dist := {}
 	var coda := []
+	var ost := ostili(l)
 	for id in m.s["ctrl"]:
 		var c: String = m.s["ctrl"][id]
-		var lc := m.lato(c)
-		if lc == "" or lc == l:
-			continue
-		var nemico := false
-		for p in m.potenze_del_lato(l):
-			if m.in_guerra(p, c):
-				nemico = true
-		if not nemico and l == "asse" and lc == "alleati" and c == "URSS" and _prepara_barbarossa():
-			nemico = true
-		if not nemico:
+		if not ost.has(c):
 			continue
 		dist[id] = 0
 		coda.append(id)
@@ -304,13 +293,29 @@ func _piano_movimento(sfruttamento: bool) -> Array:
 			unita.append(uid)
 	# corazzati per primi, poi la fanteria più forte
 	unita.sort_custom(func(a, b): return _priorita(a) > _priorita(b))
-	var presi := {}   # esagono -> unità previste
-	var difesa := {}  # esagoni di fronte già coperti
+	var presi := {}   # esagono -> unità previste in arrivo
+	var difesa := {}  # esagono -> unità presenti (dopo le mosse previste)
 	for uid in m.s["u"]:
 		var u: Dictionary = m.s["u"][uid]
 		if m.lato(u["n"]) == l and Motore._terrestre(u["t"]):
 			difesa[u["h"]] = int(difesa.get(u["h"], 0)) + 1
+	var usate := {}
+	if not sfruttamento:
+		# 1. coprire i settori del fronte rimasti scoperti (anche verso i nemici potenziali)
+		for dec in _copri_fronte(l, presi, difesa, usate):
+			piano.append(dec)
+		# 2. presidiare capitali e obiettivi vicini al nemico
+		piano = _presidi(piano, difesa, fronte, l, usate)
+		for d in piano:
+			usate[d["u"]] = true
+	if not sfruttamento and l == "alleati" and int(m.s["anno"]) >= 1943 and m.attiva("USA"):
+		for dec in _sbarco(usate, presi):
+			piano.append(dec)
+			usate[dec["u"]] = true
+	var ob := _assegna_obiettivi(l, unita, usate)
 	for uid in unita:
+		if usate.has(uid):
+			continue
 		var u: Dictionary = m.s["u"][uid]
 		var dec := {}
 		match u["t"]:
@@ -319,7 +324,7 @@ func _piano_movimento(sfruttamento: bool) -> Array:
 			"flo":
 				dec = {}
 			_:
-				dec = _muovi_terrestre(uid, fronte, presi, difesa, sfruttamento)
+				dec = _muovi_terrestre(uid, fronte, presi, difesa, sfruttamento, ob.get(uid, ""))
 		if dec.is_empty():
 			continue
 		piano.append(dec)
@@ -327,12 +332,327 @@ func _piano_movimento(sfruttamento: bool) -> Array:
 			presi[dec["h"]] = int(presi.get(dec["h"], 0)) + 1
 			difesa[u["h"]] = int(difesa.get(u["h"], 1)) - 1
 			difesa[dec["h"]] = int(difesa.get(dec["h"], 0)) + 1
-	if not sfruttamento:
-		piano = _presidi(piano, difesa, fronte, l)
 	return piano
 
-## le capitali e gli obiettivi della propria patria vicini al nemico non restano vuoti
-func _presidi(piano: Array, difesa: Dictionary, fronte: Dictionary, l: String) -> Array:
+## Sbarco anglo-americano: dalle navi in porto verso una costa nemica sguarnita, vicina agli obiettivi
+func _sbarco(usate: Dictionary, presi: Dictionary) -> Array:
+	var piano := []
+	if int(m.s["pot"]["GB"]["opz"] == "off") + int(m.s["pot"]["USA"]["opz"] == "off") == 0:
+		return piano
+	var ost := ostili("alleati")
+	var candidati := {}   # esagono -> unità che possono arrivarci
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		if not (m.comandante(u["n"]) in ["GB", "USA"]) or not Motore._terrestre(u["t"]) or usate.has(uid) or not m.puo_muovere(uid):
+			continue
+		if not D.porti.has(u["h"]):
+			continue
+		var rr := m.raggiungibili(uid)
+		for id in rr:
+			if int(rr[id]) != -1 or not ost.has(m.controllo(id)):
+				continue
+			if not (D.esagoni[id]["n"] in ["FRA", "BEL", "NED", "ITA", "GER", "NOR", "DAN", "GRE", "LIB", "TUN", "ALG", "MAR"]):
+				continue
+			if not candidati.has(id):
+				candidati[id] = []
+			candidati[id].append(uid)
+	var migliore := ""
+	var mv := -999.0
+	var obs := obiettivi("alleati")
+	for id in candidati:
+		var difesa := _minaccia(id, "alleati", ost)
+		if difesa > 10.0:
+			continue
+		var v := _importanza(id) * 1.5 - difesa * 0.6 + float(candidati[id].size())
+		var vicino := 99
+		for o in obs:
+			var f := campo(o, "alleati")
+			if f.has(id):
+				vicino = mini(vicino, int(f[id]))
+		v -= float(mini(vicino, 30)) * 0.4
+		if v > mv:
+			mv = v
+			migliore = id
+	if migliore == "" or candidati[migliore].size() < 2:
+		return piano
+	var lista: Array = candidati[migliore]
+	lista.sort_custom(func(a, b): return _priorita(a) > _priorita(b))
+	for uid in lista.slice(0, 2):
+		piano.append({"t": "muovi", "u": uid, "h": migliore})
+		presi[migliore] = int(presi.get(migliore, 0)) + 1
+	# un secondo esagono accanto per allargare la testa di ponte
+	for v in D.esagoni[migliore]["terra"]:
+		if not candidati.has(v) or not D.esagoni[v]["costa"]:
+			continue
+		var n := 0
+		for uid in candidati[v]:
+			if n >= 2 or lista.slice(0, 2).has(uid):
+				continue
+			piano.append({"t": "muovi", "u": uid, "h": v})
+			n += 1
+		if n > 0:
+			break
+	return piano
+
+# -------------------------------------------------------------------------------------
+# Strategia: fronti, minacce e obiettivi
+# -------------------------------------------------------------------------------------
+
+var _ostili_chiave := ""
+var _ostili := {}
+
+## nazioni ostili allo schieramento l: quelle in guerra e, come minaccia futura, la grande potenza
+## avversaria ancora neutrale (l'URSS per l'Asse dal 1941, la Germania per l'URSS)
+func ostili(l: String) -> Dictionary:
+	var chiave := "%s|%d" % [l, int(m.s["prog"])]
+	if chiave == _ostili_chiave:
+		return _ostili
+	var out := {}
+	var codici := {}
+	for id in m.s["ctrl"]:
+		codici[m.s["ctrl"][id]] = true
+	for uid in m.s["u"]:
+		codici[m.s["u"][uid]["n"]] = true
+	for c in codici:
+		var lc := m.lato(c)
+		if lc == "" or lc == l:
+			continue
+		var peso := 0.0
+		for p in m.potenze_del_lato(l):
+			if m.in_guerra(p, c):
+				peso = 1.0
+		if peso == 0.0 and c in ["URSS", "GER"] and not m.s["pot"]["URSS"]["arresa"]:
+			# minaccia potenziale fra Germania e URSS
+			var anno := int(m.s["anno"])
+			if l == "asse" and c == "URSS":
+				peso = 0.0 if anno < 1941 else (0.6 if anno == 1941 else 1.0)
+			elif l == "alleati" and c == "GER":
+				peso = 0.0 if anno < 1941 else 0.8
+		if peso > 0.0:
+			out[c] = peso
+	_ostili = out
+	_ostili_chiave = chiave
+	return out
+
+## minaccia su un esagono: fattori terrestri ostili entro 2 esagoni (pesati)
+func _minaccia(id: String, l: String, ost: Dictionary) -> float:
+	var tot := 0.0
+	var visti := {id: 0}
+	var coda := [id]
+	var i := 0
+	while i < coda.size():
+		var a: String = coda[i]
+		i += 1
+		if int(visti[a]) >= 2:
+			continue
+		for b in D.esagoni[a]["terra"]:
+			if visti.has(b):
+				continue
+			visti[b] = int(visti[a]) + 1
+			coda.append(b)
+			for x in m.terrestri_in(b):
+				var n: String = m.s["u"][x]["n"]
+				var c := n if ost.has(n) else m.comandante(n)
+				if ost.has(n):
+					tot += m.forza(x) * float(ost[n])
+				elif ost.has(c) and m.lato(n) != l:
+					tot += m.forza(x) * float(ost[c])
+	return tot
+
+## esagoni di confine dello schieramento l con il fabbisogno di unità
+func fronte_settori(l: String) -> Array:
+	var ost := ostili(l)
+	var out := []
+	for id in m.s["ctrl"]:
+		var c: String = m.s["ctrl"][id]
+		if m.lato(c) != l or not D.terra(id):
+			continue
+		if not (m.maggiore(c) or m.s["min"].get(c, {}).get("st", "") in ["alleato", "attaccato"]):
+			continue
+		var confine := false
+		for v in D.esagoni[id]["terra"]:
+			var cv := m.controllo(v)
+			if ost.has(cv):
+				confine = true
+			for x in m.terrestri_in(v):
+				if ost.has(m.s["u"][x]["n"]) or ost.has(m.comandante(m.s["u"][x]["n"])) and m.lato(m.s["u"][x]["n"]) != l:
+					confine = true
+		if not confine:
+			continue
+		var mn := _minaccia(id, l, ost)
+		if mn <= 0.0:
+			continue
+		var bisogno := 1
+		if mn >= 9.0 or _importanza(id) >= 6.0:
+			bisogno = 2
+		var prio := mn + _importanza(id) * 1.5 + (2.0 if D.esagoni[id]["t"] != 0 else 0.0)
+		out.append({"h": id, "b": bisogno, "p": prio})
+	out.sort_custom(func(a, b): return float(a["p"]) > float(b["p"]))
+	return out
+
+## sposta unità dalle retrovie (o da settori in eccesso) verso i settori scoperti
+func _copri_fronte(l: String, presi: Dictionary, difesa: Dictionary, usate: Dictionary) -> Array:
+	var piano := []
+	var settori := fronte_settori(l)
+	var bisogno := {}
+	for st in settori:
+		bisogno[st["h"]] = int(st["b"])
+	# disponibili: unità terrestri che non servono dove sono
+	var disp := []
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		if m.lato(u["n"]) != l or not Motore._terrestre(u["t"]) or not m.puo_muovere(uid) or u["h"] == "USA":
+			continue
+		disp.append(uid)
+	var rr_cache := {}
+	var limite := 0
+	for st in settori:
+		var h: String = st["h"]
+		var manca: int = int(st["b"]) - int(difesa.get(h, 0))
+		while manca > 0 and limite < 400:
+			limite += 1
+			var migliore := ""
+			var md := 999
+			for uid in disp:
+				if usate.has(uid):
+					continue
+				var qui: String = m.s["u"][uid]["h"]
+				# non sguarnire un settore che a sua volta ne ha bisogno
+				if int(difesa.get(qui, 0)) <= int(bisogno.get(qui, 0)):
+					continue
+				if not rr_cache.has(uid):
+					rr_cache[uid] = m.raggiungibili(uid)
+				var rr: Dictionary = rr_cache[uid]
+				if rr.has(h) and int(rr[h]) >= 0 and int(rr[h]) < md and int(presi.get(h, 0)) + m.terrestri_in(h).size() < 2:
+					md = int(rr[h])
+					migliore = uid
+			if migliore == "":
+				break
+			usate[migliore] = true
+			var da: String = m.s["u"][migliore]["h"]
+			piano.append({"t": "muovi", "u": migliore, "h": h})
+			presi[h] = int(presi.get(h, 0)) + 1
+			difesa[da] = int(difesa.get(da, 1)) - 1
+			difesa[h] = int(difesa.get(h, 0)) + 1
+			manca -= 1
+	return piano
+
+var _campi := {}
+var _campi_chiave := ""
+
+## obiettivi offensivi dello schieramento: capitali e città obiettivo nemiche
+func obiettivi(l: String) -> Dictionary:
+	var ost := ostili(l)
+	var out := {}
+	for id in D.obiettivi + D.capitali.values():
+		if id == "" or not D.esagoni.has(id):
+			continue
+		var c := m.controllo(id)
+		if not ost.has(c):
+			continue
+		# contro i nemici solo potenziali si punta solo quando la Germania prepara Barbarossa
+		if float(ost[c]) < 1.0 and not (l == "asse" and _prepara_barbarossa()):
+			var in_guerra := false
+			for p in m.potenze_del_lato(l):
+				if m.in_guerra(p, c):
+					in_guerra = true
+			if not in_guerra:
+				continue
+		var tipo: String = D.esagoni[id]["tipo"]
+		var peso := 2.0
+		if tipo.contains("C"):
+			peso = 4.0 if m.maggiore(D.esagoni[id]["n"]) else 3.0
+		if tipo.contains("I"):
+			peso += 1.0
+		out[id] = peso * _peso_strategico(l, id, c)
+	return out
+
+## priorità strategiche, come le giocano i giocatori esperti:
+## Asse: prima la Francia (Parigi), poi i Balcani prima di Barbarossa, poi Leningrado-Mosca-Ucraina;
+## l'Italia punta all'Egitto e a Suez. Alleati: l'URSS contrattacca dal 1943, gli anglo-americani tornano
+## sul continente dal 1943 e puntano alla Germania.
+func _peso_strategico(l: String, id: String, c: String) -> float:
+	var nome: String = D.esagoni[id]["citta"]
+	var orig: String = D.esagoni[id]["n"]
+	if l == "asse":
+		if orig == "FRA" and not m.s["pot"]["FRA"]["arresa"]:
+			return 3.0 if nome == "Paris" else 1.8
+		if orig in ["BEL", "NED", "LUX", "DAN", "NOR"]:
+			return 1.5
+		if orig in ["JUG", "GRE"]:
+			return 1.8
+		if orig == "URSS":
+			return 2.0 if nome in ["Moscow", "Leningrad", "Kiev", "Kharkov"] else 1.5
+		if orig in ["EGI", "PAL", "IRQ"] or nome in ["Alexandria", "Suez", "Malta", "Gibraltar"]:
+			return 2.0
+		if orig == "GB":
+			return 0.5
+		return 1.0
+	# Alleati
+	var anno := int(m.s["anno"])
+	if orig == "GER":
+		return 2.0 if nome == "Berlin" else 1.3
+	if orig in ["ITA", "LIB"] and anno >= 1942:
+		return 1.6
+	if orig in ["FRA", "BEL", "NED"] and anno >= 1943:
+		return 1.6
+	return 1.0
+
+## distanze via terra da un obiettivo, attraverso territorio amico, nemico o ostile (non neutrale)
+func campo(obiettivo: String, l: String) -> Dictionary:
+	var chiave := "%s|%d|%s" % [l, int(m.s["turno"]), m.s["fase"]]
+	if chiave != _campi_chiave:
+		_campi = {}
+		_campi_chiave = chiave
+	if _campi.has(obiettivo):
+		return _campi[obiettivo]
+	var ost := ostili(l)
+	var dist := {obiettivo: 0}
+	var coda := [obiettivo]
+	var i := 0
+	while i < coda.size():
+		var a: String = coda[i]
+		i += 1
+		for b in D.esagoni[a]["terra"]:
+			if dist.has(b) or not D.terra(b):
+				continue
+			var c := m.controllo(b)
+			if c != "" and m.lato(c) != l and not ost.has(c):
+				continue
+			dist[b] = int(dist[a]) + 1
+			coda.append(b)
+	_campi[obiettivo] = dist
+	return dist
+
+## ogni unità punta all'obiettivo più conveniente del suo teatro, con un po' di bilanciamento
+func _assegna_obiettivi(l: String, unita: Array, usate: Dictionary) -> Dictionary:
+	var obs := obiettivi(l)
+	var out := {}
+	if obs.is_empty():
+		return out
+	var carico := {}
+	for uid in unita:
+		if usate.has(uid):
+			continue
+		var u: Dictionary = m.s["u"][uid]
+		if not Motore._terrestre(u["t"]) or u["h"] == "USA":
+			continue
+		var migliore := ""
+		var mv := 99999.0
+		for o in obs:
+			var f := campo(o, l)
+			if not f.has(u["h"]):
+				continue
+			var v := float(f[u["h"]]) - float(obs[o]) * 3.0 + float(carico.get(o, 0)) * 0.12
+			if v < mv:
+				mv = v
+				migliore = o
+		if migliore != "":
+			out[uid] = migliore
+			carico[migliore] = int(carico.get(migliore, 0)) + m.forza(uid)
+	return out
+
+func _presidi(piano: Array, difesa: Dictionary, fronte: Dictionary, l: String, usate := {}) -> Array:
 	var mosse := {}
 	for d in piano:
 		mosse[d["u"]] = d
@@ -353,7 +673,7 @@ func _presidi(piano: Array, difesa: Dictionary, fronte: Dictionary, l: String) -
 		var md := 999
 		for uid in m.s["u"]:
 			var u: Dictionary = m.s["u"][uid]
-			if m.lato(u["n"]) != l or not Motore._terrestre(u["t"]) or not m.puo_muovere(uid):
+			if m.lato(u["n"]) != l or not Motore._terrestre(u["t"]) or not m.puo_muovere(uid) or usate.has(uid):
 				continue
 			if int(difesa.get(u["h"], 0)) <= 1 and int(fronte.get(u["h"], 99)) <= 1:
 				continue
@@ -375,7 +695,7 @@ func _priorita(uid: String) -> float:
 	var k := {"cor": 3.0, "par": 2.0, "fan": 1.0, "rim": 0.5, "avi": 0.1, "flo": 0.0}
 	return k.get(u["t"], 0.0) * 10.0 + float(u["a"])
 
-func _muovi_terrestre(uid: String, fronte: Dictionary, presi: Dictionary, difesa: Dictionary, sfruttamento: bool) -> Dictionary:
+func _muovi_terrestre(uid: String, fronte: Dictionary, presi: Dictionary, difesa: Dictionary, sfruttamento: bool, obiettivo := "") -> Dictionary:
 	var u: Dictionary = m.s["u"][uid]
 	var n: String = u["n"]
 	var off := m.opzione(n) == "off"
@@ -386,11 +706,12 @@ func _muovi_terrestre(uid: String, fronte: Dictionary, presi: Dictionary, difesa
 	var d_qui := int(fronte.get(qui, 99))
 	# valore del restare: alto se l'esagono è sul fronte e importante
 	var best := ""
-	var best_v := _valore_posizione(qui, n, off, fronte, difesa, true, uid)
+	var f_ob: Dictionary = campo(obiettivo, m.s["lato"]) if obiettivo != "" else {}
+	var best_v := _valore_posizione(qui, n, off, fronte, difesa, true, uid) - _peso_ob(f_ob, qui)
 	for id in rr:
 		if int(presi.get(id, 0)) + m.terrestri_in(id).size() >= 2:
 			continue
-		var v := _valore_posizione(id, n, off, fronte, difesa, false, uid)
+		var v := _valore_posizione(id, n, off, fronte, difesa, false, uid) - _peso_ob(f_ob, id)
 		if int(rr[id]) == -1:
 			# via mare: l'IA sbarca solo in territorio amico o con un'invasione alleata dal 1943
 			var amica := m.lato(m.controllo(id)) == m.lato(n)
@@ -406,6 +727,23 @@ func _muovi_terrestre(uid: String, fronte: Dictionary, presi: Dictionary, difesa
 		return {}
 	return {"t": "muovi", "u": uid, "h": best}
 
+## attrazione verso l'obiettivo assegnato: ogni esagono di avvicinamento conta
+func _peso_ob(f: Dictionary, id: String) -> float:
+	if f.is_empty():
+		return 0.0
+	return float(f.get(id, 80)) * 1.3
+
+## l'esagono è protetto da un fiume verso tutti i vicini ostili
+func _dietro_fiume(id: String, n: String) -> bool:
+	var ost := ostili(m.lato(n))
+	var trovati := 0
+	for v in D.esagoni[id]["terra"]:
+		if ost.has(m.controllo(v)):
+			trovati += 1
+			if not D.fiume_tra(id, v):
+				return false
+	return trovati > 0
+
 func _vicino_a_amici(id: String, n: String) -> bool:
 	for v in D.esagoni[id]["vicini"]:
 		for x in m.terrestri_in(v):
@@ -415,7 +753,7 @@ func _vicino_a_amici(id: String, n: String) -> bool:
 
 func _valore_posizione(id: String, n: String, off: bool, fronte: Dictionary, difesa: Dictionary, resto: bool, uid: String) -> float:
 	var d := int(fronte.get(id, 60))
-	var v := -float(d) * 1.5
+	var v := -float(mini(d, 12)) * 0.6
 	var c := m.controllo(id)
 	var lc := m.lato(c)
 	var mio := lc == m.lato(n)
@@ -446,7 +784,9 @@ func _valore_posizione(id: String, n: String, off: bool, fronte: Dictionary, dif
 		if minaccia > 0:
 			v += (3.0 if gia <= 0 else (1.0 if gia == 1 else -2.0)) + _importanza(id) * 0.5 + minaccia * 0.05
 			if D.esagoni[id]["t"] != 0:
-				v += 1.0
+				v += 1.5
+			elif _dietro_fiume(id, n):
+				v += 1.2
 	if resto:
 		v += 0.5
 	# non lasciare la capitale scoperta
@@ -673,44 +1013,182 @@ func _valore_unita(e: Array, p: String, budget: int) -> float:
 			return 0.5 if budget >= 80 and p in ["GB", "USA"] else -1.0
 	return 0.0 - c * 0.01
 
+## distanze via terra dagli esagoni controllati da certe nazioni
+func _distanza_da(codici: Array) -> Dictionary:
+	var dist := {}
+	var coda := []
+	for id in m.s["ctrl"]:
+		if codici.has(m.s["ctrl"][id]):
+			dist[id] = 0
+			coda.append(id)
+	var i := 0
+	while i < coda.size():
+		var a: String = coda[i]
+		i += 1
+		for b in D.esagoni[a]["terra"]:
+			if not D.terra(b) or dist.has(b):
+				continue
+			dist[b] = int(dist[a]) + 1
+			coda.append(b)
+	return dist
+
+## Riequilibrio fra i teatri della Germania: le forze tedesche si dividono fra ovest ed est
+## in proporzione alla minaccia (anche quella sovietica prima della guerra, dal 1941).
+## Restituisce i ridispiegamenti da fare e aggiorna occ.
+func _riequilibrio_tedesco(occ: Dictionary, quanti: int) -> Array:
+	var piano := []
+	if quanti <= 0 or not m.attiva("GER") or m.s["pot"]["URSS"]["arresa"]:
+		return piano
+	var ost := ostili("asse")
+	if not ost.has("URSS"):
+		return piano
+	var occidentali := []
+	for c in ["FRA", "GB", "USA"]:
+		if ost.has(c):
+			occidentali.append(c)
+	var d_est := _distanza_da(["URSS"])
+	var d_ovest := _distanza_da(occidentali) if occidentali.size() > 0 else {}
+	var d_mio := _distanza_da(["GER", "ITA"])
+	var dem_est := 0.0
+	var dem_ovest := 0.0
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		if not Motore._terrestre(u["t"]) or u["h"] == "USA":
+			continue
+		if int(d_mio.get(u["h"], 99)) > 4:
+			# forze anglo-americane in patria: possibile sbarco, pesano la metà
+			if occidentali.has(m.comandante(u["n"])) and D.esagoni[u["h"]]["n"] == "GB":
+				dem_ovest += m.forza(uid) * 0.5
+			continue
+		if u["n"] == "URSS":
+			dem_est += m.forza(uid) * float(ost["URSS"])
+		elif occidentali.has(m.comandante(u["n"])):
+			dem_ovest += m.forza(uid)
+	if dem_est <= 0.0:
+		return piano
+	var f_est := 0
+	var f_ovest := 0
+	var occ_ovest := []
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		if u["n"] != "GER" or not Motore._terrestre(u["t"]) or u["h"] == "USA":
+			continue
+		var de := int(d_est.get(u["h"], 99))
+		var dw := int(d_ovest.get(u["h"], 99))
+		if de <= dw:
+			f_est += m.forza(uid)
+		else:
+			f_ovest += m.forza(uid)
+			if dw >= 2:
+				occ_ovest.append(uid)
+	if _prepara_barbarossa():
+		dem_est *= 1.6
+	var obiettivo_est := float(f_est + f_ovest) * dem_est / maxf(1.0, dem_est + dem_ovest * 1.2)
+	if float(f_est) >= obiettivo_est * 0.9:
+		return piano
+	# prima le unità più lontane dal nemico occidentale
+	occ_ovest.sort_custom(func(a, b): return int(d_ovest.get(m.s["u"][a]["h"], 99)) > int(d_ovest.get(m.s["u"][b]["h"], 99)))
+	var mancano := obiettivo_est - float(f_est)
+	for uid in occ_ovest:
+		if quanti <= 0 or mancano <= 0:
+			break
+		var best := ""
+		var bv := 999
+		for id in m.destinazioni_sr(uid):
+			if int(occ.get(id, 0)) >= 2:
+				continue
+			var de := int(d_est.get(id, 99))
+			if de < 1 or de > 3:
+				continue
+			var v := de * 3 + (0 if D.esagoni[id]["citta"] != "" else 1) + int(occ.get(id, 0))
+			if v < bv:
+				bv = v
+				best = id
+		if best == "":
+			continue
+		piano.append({"t": "sr", "u": uid, "h": best})
+		occ[best] = int(occ.get(best, 0)) + 1
+		occ[m.s["u"][uid]["h"]] = int(occ.get(m.s["u"][uid]["h"], 1)) - 1
+		mancano -= m.forza(uid)
+		quanti -= 1
+	return piano
+
 func _piano_sr() -> Array:
 	var piano := []
 	var l: String = m.s["lato"]
 	var fronte := _distanza_fronte(l)
-	var arrivi := {}
+	var settori := fronte_settori(l)
+	var obs := obiettivi(l)
+	var occ := {}
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		if m.lato(u["n"]) == l and Motore._terrestre(u["t"]):
+			occ[u["h"]] = int(occ.get(u["h"], 0)) + 1
+	var bisogno := {}
+	for st in settori:
+		bisogno[st["h"]] = int(st["b"])
+	var usati_sr := {}
+	if l == "asse":
+		for d in _riequilibrio_tedesco(occ, m.sr_rimasti("GER")):
+			piano.append(d)
+			usati_sr[d["u"]] = true
+	# forza verso ciascun obiettivo già presente nei dintorni (per mandare rinforzi dove servono)
 	for p in m.potenze_del_lato(l):
 		var n_sr := m.sr_rimasti(p)
+		if p == "GER":
+			n_sr -= usati_sr.size()
 		if n_sr <= 0:
 			continue
 		var cand := []
 		for uid in m.s["u"]:
 			var u: Dictionary = m.s["u"][uid]
-			if m.comandante(u["n"]) != p or not m.maggiore(u["n"]) or not Motore._terrestre(u["t"]):
+			if m.comandante(u["n"]) != p or not m.maggiore(u["n"]) or not Motore._terrestre(u["t"]) or usati_sr.has(uid):
 				continue
-			var d := int(fronte.get(u["h"], 99)) if u["h"] != "USA" else 99
-			if d >= 4:
+			var qui: String = u["h"]
+			if qui != "USA" and int(occ.get(qui, 0)) <= int(bisogno.get(qui, 0)):
+				continue
+			var d := int(fronte.get(qui, 99)) if qui != "USA" else 99
+			if d >= 2:
 				cand.append(uid)
 		cand.sort_custom(func(a, b): return _priorita(a) > _priorita(b))
 		for uid in cand:
 			if n_sr <= 0:
 				break
 			var dest := m.destinazioni_sr(uid)
-			var best := ""
-			var bv := -999.0
+			if dest.is_empty():
+				continue
 			var u: Dictionary = m.s["u"][uid]
 			var d0 := int(fronte.get(u["h"], 99)) if u["h"] != "USA" else 99
+			var best := ""
+			var bv := -9999.0
 			for id in dest:
-				if int(arrivi.get(id, 0)) + m.terrestri_in(id).size() >= 2:
+				if int(occ.get(id, 0)) >= 2:
 					continue
 				var d := int(fronte.get(id, 99))
-				if d < 1 or d >= d0:
+				var manca0 := int(bisogno.get(id, 0)) - int(occ.get(id, 0))
+				if d >= d0 and manca0 <= 0:
 					continue
-				var v := -float(d) * 2.0 + _importanza(id) * 0.3 + float(_forza_nemica_vicina(id, u["n"], 3)) * 0.05
+				var v := -float(d) * 1.5
+				# settore scoperto: priorità massima
+				var manca := int(bisogno.get(id, 0)) - int(occ.get(id, 0))
+				if manca > 0:
+					v += 12.0 + manca * 4.0
+				# vicinanza al miglior obiettivo
+				var mo := 999
+				for o in obs:
+					var f := campo(o, l)
+					if f.has(id):
+						mo = mini(mo, int(f[id]) - int(obs[o]) * 2)
+				if mo < 999:
+					v -= float(mo) * 0.8
+				if d == 0:
+					v -= 20.0
 				if v > bv:
 					bv = v
 					best = id
 			if best != "":
 				piano.append({"t": "sr", "u": uid, "h": best})
-				arrivi[best] = int(arrivi.get(best, 0)) + 1
+				occ[best] = int(occ.get(best, 0)) + 1
+				occ[u["h"]] = int(occ.get(u["h"], 1)) - 1
 				n_sr -= 1
 	return piano

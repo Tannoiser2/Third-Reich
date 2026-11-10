@@ -109,8 +109,8 @@ func _dichiarazioni() -> Dictionary:
 					voglio.append_array(["NED", "DAN"])
 				if t >= 1940 * 4 + 0:
 					voglio.append_array(["BEL", "LUX", "NOR"])
-				if t >= 1941 * 4 + 0:
-					voglio.append_array(["JUG", "GRE"])
+				# niente campagna dei Balcani: impegnava a lungo truppe che servono contro l'URSS
+				# (la Grecia resta un affare italiano)
 				# Barbarossa: dall'estate 1941, quando a est c'è una forza adeguata; comunque prima che attacchi l'URSS (1942)
 				# Barbarossa parte solo con una forza adeguata (mai d'inverno); se nel 1941 non si è pronti,
 				# si attacca nella primavera 1942 con tutto ciò che c'è, prima che l'URSS entri in guerra
@@ -328,6 +328,7 @@ func _importanza(id: String) -> float:
 
 func _piano_movimento(sfruttamento: bool) -> Array:
 	_navi_previste = {}
+	_aerei_previsti = {}
 	var l: String = m.s["lato"]
 	var piano := []
 	var fronte := _distanza_fronte(l)
@@ -552,6 +553,7 @@ func _prepara_attacchi(l: String, presi: Dictionary, difesa: Dictionary, usate: 
 	# prima i bersagli deboli e importanti
 	bersagli.sort_custom(func(a, b): return float(a["dif"]) - float(a["imp"]) * 0.8 < float(b["dif"]) - float(b["imp"]) * 0.8)
 	var usati := {}
+	var aerei_usati := {}
 	var n_att := 0
 	for bs in bersagli:
 		if n_att >= 20:
@@ -565,6 +567,13 @@ func _prepara_attacchi(l: String, presi: Dictionary, difesa: Dictionary, usate: 
 			for x in m.terrestri_in(v):
 				if m.lato(m.s["u"][x]["n"]) == l and not usati.has(x) and (usate.has(x) or not disp.has(x)):
 					forza += float(m.forza(x))
+		# l'aviazione disponibile entro 4 esagoni conta nella forza (al più due unità per attacco)
+		var aerei_t := []
+		for x in m.aerei_possibili(b, l):
+			if aerei_usati.has(x) or aerei_t.size() >= 2:
+				continue
+			aerei_t.append(x)
+			forza += float(m.forza(x))
 		var mosse := []
 		var occ_loc := {}
 		# candidati: unità che possono raggiungere un esagono adiacente al bersaglio
@@ -608,6 +617,8 @@ func _prepara_attacchi(l: String, presi: Dictionary, difesa: Dictionary, usate: 
 			forza += float(m.forza(uid))
 		if forza < serve:
 			continue
+		for x in aerei_t:
+			aerei_usati[x] = true
 		for mv in mosse:
 			var uid: String = mv[0]
 			var v: String = mv[1]
@@ -828,7 +839,16 @@ func _sr_mediterraneo(occ: Dictionary, usati: Dictionary) -> Array:
 		if m.lato(m.controllo(id)) == "asse":
 			porti_lib.append(id)
 	# l'Afrika Korps parte solo a Barbarossa iniziata (prima ogni corazzato serve a est)
-	var per_potenza := {"ITA": 2, "GER": 2 if m.s["pot"]["GER"]["guerra"].has("URSS") and m.s["pot"]["FRA"]["arresa"] and int(fa["ger"]) < 3 else 0}
+	var tedeschi_in_attesa := 0
+	for id in PORTI_ITALIA_SUD:
+		for x in m.terrestri_in(id):
+			if m.s["u"][x]["n"] == "GER":
+				tedeschi_in_attesa += 1
+	var posto_in_libia := false
+	for id in porti_lib:
+		if int(occ.get(id, 0)) < 2:
+			posto_in_libia = true
+	var per_potenza := {"ITA": 2, "GER": 2 if m.s["pot"]["GER"]["guerra"].has("URSS") and m.s["pot"]["FRA"]["arresa"] and int(fa["ger"]) + tedeschi_in_attesa < 2 and posto_in_libia and int(fa["alleati"]) > int(fa["asse"]) else 0}
 	if int(fa["ita"]) >= maxi(8, int(fa["alleati"]) + 2):
 		per_potenza["ITA"] = 0
 	# finché la Francia combatte l'Italia rinforza la Libia solo se è in inferiorità
@@ -1657,25 +1677,68 @@ func _valore_posizione(id: String, n: String, off: bool, fronte: Dictionary, dif
 		v += 8.0
 	return v
 
+var _aerei_previsti := {}   # esagono -> aerei che vi staranno dopo le mosse pianificate
+
+## l'aviazione si distribuisce lungo il fronte: base a 2-3 esagoni dal nemico, dove ci sono
+## più bersagli entro il raggio d'azione (4) e meno altri aerei amici a coprirli
 func _muovi_aereo(uid: String, fronte: Dictionary) -> Dictionary:
 	var u: Dictionary = m.s["u"][uid]
+	var l: String = m.s["lato"]
 	var qui: String = u["h"]
+	if _aerei_previsti.is_empty():
+		for x in m.s["u"]:
+			var ux: Dictionary = m.s["u"][x]
+			if ux["t"] == "avi" and m.lato(ux["n"]) == l and ux["h"] != "USA":
+				_aerei_previsti[ux["h"]] = int(_aerei_previsti.get(ux["h"], 0)) + 1
 	var rr := m.raggiungibili(uid)
-	var best := ""
-	var bd := int(fronte.get(qui, 99)) if qui != "USA" else 99
-	if bd >= 2 and bd <= 3:
-		return {}
+	rr[qui] = 0
+	var best := qui
+	var bv := -9999.0
 	for id in rr:
-		var d := int(fronte.get(id, 99))
-		if d < 2:
+		if id == "USA":
 			continue
-		var score := absi(d - 2)
-		if best == "" or score < absi(bd - 2):
+		var d := int(fronte.get(id, 99))
+		if d < 2 or d > 4:
+			if id != qui:
+				continue
+		var v := _valore_base_aerea(id, l)
+		# affollamento: altri aerei amici nella stessa base o vicini
+		var affollati := float(_aerei_previsti.get(id, 0)) - (1.0 if id == qui else 0.0)
+		v -= affollati * 6.0
+		if d < 2 or d > 4:
+			v -= 20.0
+		if id == qui:
+			v += 1.0
+		if v > bv:
+			bv = v
 			best = id
-			bd = d
-	if best == "":
+	if best == qui:
 		return {}
+	_aerei_previsti[qui] = int(_aerei_previsti.get(qui, 1)) - 1
+	_aerei_previsti[best] = int(_aerei_previsti.get(best, 0)) + 1
 	return {"t": "muovi", "u": uid, "h": best}
+
+## forza nemica attaccabile entro 4 esagoni da una base aerea
+func _valore_base_aerea(id: String, l: String) -> float:
+	var tot := 0.0
+	var visti := {id: 0}
+	var coda := [id]
+	var i := 0
+	while i < coda.size():
+		var a: String = coda[i]
+		i += 1
+		if int(visti[a]) >= 4:
+			continue
+		for b in D.esagoni[a]["vicini"]:
+			if visti.has(b):
+				continue
+			visti[b] = int(visti[a]) + 1
+			coda.append(b)
+			for x in m.terrestri_in(b):
+				var n: String = m.s["u"][x]["n"]
+				if m.lato(n) != l and m.lato(n) != "":
+					tot += float(m.forza(x))
+	return minf(tot, 40.0)
 
 # -------------------------------------------------------------------------------------
 # Combattimento

@@ -1333,6 +1333,17 @@ func _attacca(bersaglio: String, att: Array, aerei: Array, sfruttamento: bool) -
 		if s["u"][uid]["t"] == "cor":
 			corazzati = true
 	var risultato := {"bersaglio": bersaglio, "dado": dado, "esito": esito, "att": v["att"], "dif": v["dif"], "col": v["col"], "perdite_att": [], "perdite_dif": []}
+	# posizioni per la grafica: da dove attaccano truppe e aviazione, da dove interviene l'aviazione in difesa
+	risultato["da"] = []
+	for uid in a:
+		risultato["da"].append(s["u"][uid]["h"])
+	risultato["aerei_h"] = []
+	for uid in av:
+		risultato["aerei_h"].append(s["u"][uid]["h"])
+	risultato["aerei_dif_h"] = []
+	for uid in v["aerei_dif"]:
+		risultato["aerei_dif_h"].append(s["u"][uid]["h"])
+	risultato["lato"] = s["lato"]
 	var vuoto := false
 	match esito:
 		"D":

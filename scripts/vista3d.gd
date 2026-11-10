@@ -44,6 +44,7 @@ func prepara(dati: Dati, quale: String) -> void:
 	_pedine.clear()
 	_segnalini.clear()
 	_evid.clear()
+	_frecce = null
 	# luce e ambiente
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
@@ -122,6 +123,216 @@ func prepara(dati: Dati, quale: String) -> void:
 	add_child(cam)
 	bersaglio = Vector3(0, 0, -altezza * 0.12)
 	_aggiorna_camera()
+
+# -------------------------------------------------------------------------------------
+# Frecce: attacchi, appoggio aereo, avanzate, sbarchi
+# -------------------------------------------------------------------------------------
+
+var _frecce: Node3D = null
+
+func pulisci_frecce() -> void:
+	if _frecce != null:
+		for c in _frecce.get_children():
+			c.queue_free()
+
+## Disegna una freccia fra due esagoni. arco > 0: traiettoria sollevata (aviazione);
+## curva != 0: piega laterale (rotte navali); tratteggio: segmenti alternati.
+## rotta navale fra un porto e una costa: esagoni di mare (ricerca in ampiezza); vuota se non trovata
+func rotta_mare(da: String, a: String) -> Array:
+	if not D.esagoni.has(da) or not D.esagoni.has(a):
+		return []
+	var arrivo := {}
+	for v in D.esagoni[a]["vicini"]:
+		if D.esagoni[v]["t"] == 9:
+			arrivo[v] = true
+	var prec := {}
+	var coda := []
+	for v in D.esagoni[da]["vicini"]:
+		if D.esagoni[v]["t"] == 9:
+			prec[v] = ""
+			coda.append(v)
+	# porti chiusi (la Manica a Portsmouth): si esce anche dai mari dietro la costa vicina
+	for v in D.esagoni[da]["vicini"]:
+		if D.esagoni[v]["t"] != 9:
+			for w in D.esagoni[v]["vicini"]:
+				if D.esagoni[w]["t"] == 9 and not prec.has(w):
+					prec[w] = ""
+					coda.append(w)
+	var i := 0
+	var trovato := ""
+	while i < coda.size() and i < 4000:
+		var x: String = coda[i]
+		i += 1
+		if arrivo.has(x):
+			trovato = x
+			break
+		for w in D.esagoni[x]["vicini"]:
+			if D.esagoni[w]["t"] == 9 and not prec.has(w):
+				prec[w] = x
+				coda.append(w)
+	if trovato == "":
+		return []
+	var out := []
+	var c := trovato
+	while c != "":
+		out.push_front(c)
+		c = prec[c]
+	return out
+
+## freccia che segue una sequenza di esagoni (rotte navali), smussata
+func freccia_percorso(ids: Array, colore: Color, spessore := 1.0, tratteggio := false) -> void:
+	if ids.size() < 2:
+		return
+	if _frecce == null:
+		_frecce = Node3D.new()
+		add_child(_frecce)
+	var r := D.raggio(mappa) * LARGHEZZA
+	var pts := []
+	for id in ids:
+		var q := mondo(id)
+		q.y = 0.45
+		pts.append(q)
+	# accorcia gli estremi verso il centro degli esagoni di partenza e arrivo
+	var n0: Vector3 = (pts[1] - pts[0]).normalized()
+	pts[0] = pts[0] + n0 * r * 0.3
+	var nl: Vector3 = (pts[pts.size() - 1] - pts[pts.size() - 2]).normalized()
+	pts[pts.size() - 1] = pts[pts.size() - 1] - nl * r * 0.5
+	# smussatura (Chaikin, due passate)
+	for k in 2:
+		var nuovi := [pts[0]]
+		for j in pts.size() - 1:
+			var a0: Vector3 = pts[j]
+			var a1: Vector3 = pts[j + 1]
+			nuovi.append(a0.lerp(a1, 0.25))
+			nuovi.append(a0.lerp(a1, 0.75))
+		nuovi.append(pts[pts.size() - 1])
+		pts = nuovi
+	_disegna_punti(pts, colore, r, spessore, tratteggio)
+
+func freccia(da: String, a: String, colore: Color, spessore := 1.0, arco := 0.0, curva := 0.0, tratteggio := false) -> void:
+	if da == "" or a == "" or da == a:
+		return
+	if _frecce == null:
+		_frecce = Node3D.new()
+		add_child(_frecce)
+	var p0 := mondo(da)
+	var p2 := mondo(a)
+	var r := D.raggio(mappa) * LARGHEZZA
+	var dir := (p2 - p0)
+	dir.y = 0.0
+	var lung := dir.length()
+	if lung < 0.01:
+		return
+	var n := dir / lung
+	var lat := Vector3(-n.z, 0, n.x)
+	# punto di controllo della curva
+	var p1 := (p0 + p2) * 0.5 + lat * curva * lung
+	# le frecce partono e arrivano al bordo degli esagoni
+	p0 = p0 + n * r * 0.15
+	p2 = p2 - n * r * 0.5
+	var base_y := 0.45
+	var w := r * 0.3 * spessore
+	var passi := 24
+	var punti := []
+	for i in passi + 1:
+		var t := float(i) / float(passi)
+		var q := p0.lerp(p1, t).lerp(p1.lerp(p2, t), t)
+		q.y = base_y + arco * r * 4.0 * t * (1.0 - t)
+		punti.append(q)
+	_disegna_punti(punti, colore, r, spessore, tratteggio)
+
+func _disegna_punti(punti: Array, colore: Color, r: float, spessore: float, tratteggio: bool) -> void:
+	var w := r * 0.3 * spessore
+	var lung := 0.0
+	for i in punti.size() - 1:
+		lung += (punti[i + 1] - punti[i]).length()
+	var testa := minf(r * 0.6 * spessore, lung * 0.45)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = true
+	mat.render_priority = 120
+	mat.albedo_color = colore
+	var mb := mat.duplicate() as StandardMaterial3D
+	mb.albedo_color = Color(0.05, 0.04, 0.03, colore.a * 0.85)
+	mb.render_priority = 119
+	# contorno scuro più largo sotto la freccia colorata
+	for k in 2:
+		var mi := MeshInstance3D.new()
+		mi.mesh = _mesh_freccia(punti, w * (1.7 if k == 0 else 1.0), testa * (1.25 if k == 0 else 1.0), tratteggio, r)
+		mi.material_override = mb if k == 0 else mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_frecce.add_child(mi)
+
+func _mesh_freccia(punti: Array, w: float, testa: float, tratteggio: bool, r: float) -> ArrayMesh:
+	var passi := punti.size() - 1
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var lung_tot := 0.0
+	for i in passi:
+		lung_tot += (punti[i + 1] - punti[i]).length()
+	var percorso := 0.0
+	for i in passi:
+		var a0: Vector3 = punti[i]
+		var a1: Vector3 = punti[i + 1]
+		var seg := (a1 - a0).length()
+		if percorso + seg > lung_tot - testa * 0.9:
+			break
+		var acceso := true
+		if tratteggio:
+			acceso = int(percorso / (r * 0.35)) % 2 == 0
+		percorso += seg
+		if not acceso:
+			continue
+		var d2 := a1 - a0
+		d2.y = 0
+		if d2.length() < 0.0001:
+			continue
+		d2 = d2.normalized()
+		var l2 := Vector3(-d2.z, 0, d2.x) * w * 0.5
+		st.add_vertex(a0 - l2)
+		st.add_vertex(a0 + l2)
+		st.add_vertex(a1 + l2)
+		st.add_vertex(a0 - l2)
+		st.add_vertex(a1 + l2)
+		st.add_vertex(a1 - l2)
+	var fine: Vector3 = punti[passi]
+	var prima: Vector3 = punti[passi - 2]
+	var dt := fine - prima
+	dt.y = 0
+	dt = dt.normalized()
+	var lt := Vector3(-dt.z, 0, dt.x)
+	var bp := fine - dt * testa
+	bp.y = fine.y
+	st.add_vertex(bp - lt * testa * 0.6)
+	st.add_vertex(bp + lt * testa * 0.6)
+	st.add_vertex(fine + dt * testa * 0.1)
+	return st.commit()
+
+## piccolo simbolo di un'ancora (sbarco) o di un aereo sulla mappa: un rombo colorato
+func segno(id: String, colore: Color) -> void:
+	if _frecce == null:
+		_frecce = Node3D.new()
+		add_child(_frecce)
+	var r := D.raggio(mappa) * LARGHEZZA
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = r * 0.32
+	cyl.bottom_radius = r * 0.32
+	cyl.height = 0.01
+	cyl.radial_segments = 4
+	var mi := MeshInstance3D.new()
+	mi.mesh = cyl
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.no_depth_test = true
+	mat.render_priority = 121
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = colore
+	mi.material_override = mat
+	var p := mondo(id)
+	mi.position = Vector3(p.x, 0.5, p.z)
+	_frecce.add_child(mi)
 
 func _crea_multimesh(nome: String) -> MultiMeshInstance3D:
 	var mmi := MultiMeshInstance3D.new()

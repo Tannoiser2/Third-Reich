@@ -621,6 +621,7 @@ func _process(delta: float) -> void:
 
 func _passo_ia(r: Dictionary) -> void:
 	var d := ia.decidi(r)
+	var prima := _prima_di_applicare(d)
 	var res := m.applica(d)
 	if not res["ok"]:
 		_rifiuti_ia += 1
@@ -629,7 +630,7 @@ func _passo_ia(r: Dictionary) -> void:
 			_rifiuti_ia = 0
 		return
 	_rifiuti_ia = 0
-	_dopo_decisione(d, res)
+	_dopo_decisione(d, res, prima)
 	var t: String = d.get("t", "")
 	match t:
 		"muovi", "sr":
@@ -642,10 +643,78 @@ func _passo_ia(r: Dictionary) -> void:
 			_pausa = 0.25 * velocita
 
 ## dopo ogni decisione (umana, IA o arrivata dalla rete)
-func _dopo_decisione(d: Dictionary, res: Dictionary) -> void:
+## posizioni da ricordare prima che una decisione sposti le pedine (per le frecce)
+func _prima_di_applicare(d: Dictionary) -> Dictionary:
+	var out := {}
+	if m == null:
+		return out
+	match d.get("t", ""):
+		"avanza":
+			var da := []
+			for uid in d.get("u", []):
+				if m.s["u"].has(uid):
+					da.append(m.s["u"][uid]["h"])
+			out["da"] = da
+		"muovi":
+			var uid: String = d.get("u", "")
+			if m.s["u"].has(uid):
+				out["da"] = m.s["u"][uid]["h"]
+				out["tipo"] = m.s["u"][uid]["t"]
+				var sf: bool = m.s["fase"] == "sfruttamento"
+				out["mare"] = Motore._terrestre(m.s["u"][uid]["t"]) and int(m.raggiungibili(uid, sf).get(d.get("h", ""), 0)) == -1
+	return out
+
+const COL_ASSE := Color(0.85, 0.12, 0.08, 0.95)
+const COL_ALLEATI := Color(0.2, 0.45, 0.95, 0.95)
+
+func _frecce_decisione(d: Dictionary, res: Dictionary, prima: Dictionary) -> void:
+	var t: String = d.get("t", "")
+	if t == "attacca" and res.has("risultato"):
+		var r: Dictionary = res["risultato"]
+		var col := COL_ASSE if r.get("lato", "") == "asse" else COL_ALLEATI
+		var b: String = r["bersaglio"]
+		var visti := {}
+		for h in r.get("da", []):
+			if not visti.has(h):
+				visti[h] = true
+				vista.freccia(h, b, col, 1.0)
+		# appoggio aereo: archi tratteggiati gialli (attacco) e bianchi (difesa)
+		for h in r.get("aerei_h", []):
+			vista.freccia(h, b, Color(1.0, 0.85, 0.15, 0.95), 0.7, 1.2, 0.0, true)
+		for h in r.get("aerei_dif_h", []):
+			vista.freccia(h, b, Color(0.95, 0.95, 0.95, 0.9), 0.6, 1.0, 0.0, true)
+	elif t == "avanza":
+		var h: String = m.s["avanzata"].get("h", "") if m.s["avanzata"].has("h") else ""
+		for da in prima.get("da", []):
+			var dest := ""
+			for uid in d.get("u", []):
+				if m.s["u"].has(uid):
+					dest = m.s["u"][uid]["h"]
+			vista.freccia(da, dest if dest != "" else h, Color(0.35, 0.85, 0.3, 0.95), 0.8)
+			break
+	elif t == "muovi" and prima.get("mare", false):
+		# sbarco anfibio: rotta navale curva in azzurro con il segno dell'ancora sul porto di partenza
+		_freccia_mare(prima["da"], d.get("h", ""), Color(0.1, 0.85, 0.95, 0.95), 1.1)
+		vista.segno(prima["da"], Color(0.1, 0.85, 0.95, 1.0))
+	elif t == "muovi" and prima.get("tipo", "") == "flo":
+		_freccia_mare(prima["da"], d.get("h", ""), Color(0.55, 0.75, 0.95, 0.8), 0.6)
+	elif t == "muovi" and prima.get("tipo", "") == "avi":
+		vista.freccia(prima["da"], d.get("h", ""), Color(1.0, 0.85, 0.15, 0.7), 0.5, 0.8, 0.0, true)
+
+## freccia lungo la rotta navale (se trovata), altrimenti una curva diretta
+func _freccia_mare(da: String, a: String, col: Color, spessore: float) -> void:
+	var rotta: Array = vista.rotta_mare(da, a) if da != "USA" else []
+	if rotta.size() > 0:
+		vista.freccia_percorso([da] + rotta + [a], col, spessore, true)
+	else:
+		vista.freccia(da, a, col, spessore, 0.0, 0.18, true)
+
+func _dopo_decisione(d: Dictionary, res: Dictionary, prima := {}) -> void:
 	var t: String = d.get("t", "")
 	vista.tempo_anim = 0.18 * velocita if not umani.get(m.s["lato"], false) else 0.22
 	vista.aggiorna(m.s, true)
+	if res.get("ok", false):
+		_frecce_decisione(d, res, prima)
 	if t == "attacca" and res.has("risultato"):
 		var r: Dictionary = res["risultato"]
 		var testo: String = r.get("testo", "")
@@ -656,6 +725,9 @@ func _dopo_decisione(d: Dictionary, res: Dictionary) -> void:
 	elif t in ["muovi", "sr"]:
 		vista.evidenzia("ultimo", [d.get("h", "")])
 	if m.s["fase"] != _ultima_fase:
+		# le frecce di un turno (sbarchi, attacchi, avanzate) restano visibili fino al movimento successivo
+		if m.s["fase"] == "movimento":
+			vista.pulisci_frecce()
 		_ultima_fase = m.s["fase"]
 		_salva_timer = 1.0
 		vista.evidenzia("ultimo", [])
@@ -683,11 +755,12 @@ func _mio_turno() -> bool:
 func _decidi(d: Dictionary) -> Dictionary:
 	if online:
 		return await _decidi_online(d)
+	var prima := _prima_di_applicare(d)
 	var res := m.applica(d)
 	if not res["ok"]:
 		_mostra_toast(res.get("msg", "non valido"), 2.5)
 		return res
-	_dopo_decisione(d, res)
+	_dopo_decisione(d, res, prima)
 	return res
 
 func _clic_esagono(id: String) -> void:
@@ -1361,9 +1434,10 @@ func _decidi_online(d: Dictionary) -> Dictionary:
 	if not ok:
 		_mostra_toast("Invio non riuscito, riprova. %s" % rete.last_error, 3.0)
 		return {"ok": false}
+	var prima := _prima_di_applicare(d)
 	var res := m.applica(d)
 	n_applicate += 1
-	_dopo_decisione(d, res)
+	_dopo_decisione(d, res, prima)
 	return res
 
 func _ciclo_online(delta: float) -> void:
@@ -1386,7 +1460,8 @@ func _sincronizza() -> void:
 		if int(k) != n_applicate:
 			break
 		var d: Dictionary = nuove[k]
+		var prima := _prima_di_applicare(d)
 		var res := m.applica(d)
 		n_applicate += 1
-		_dopo_decisione(d, res)
+		_dopo_decisione(d, res, prima)
 	_sincro_in_corso = false

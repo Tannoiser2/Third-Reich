@@ -63,6 +63,26 @@ func _run():
 				main._clic_esagono(main.m.s["u"][uid]["h"])
 				break
 		await shot("mov2")
+	if modo == "frecce":
+		# l'IA gioca per entrambi fino a un turno con combattimenti e sbarchi, poi si guarda la mappa
+		if args.size() > 5:
+			main.m = Motore.new(main.D)
+			main.m.nuova(args[6] if args.size() > 6 else "advanced", int(args[5]))
+			main._avvia()
+		main.umani = {"asse": false, "alleati": false}
+		main.velocita = 0.0
+		var k := 0
+		var obiettivo := args[1] if args.size() > 1 else "Estate 1942"
+		while not main.m.finita() and k < 20000:
+			var r: Dictionary = main.m.richiesta()
+			if main.m.data_testo() == obiettivo and main.m.s["fase"] == "costruzione" and main.m.s["lato"] == (args[2] if args.size() > 2 else "asse"):
+				break
+			main._passo_ia(r)
+			k += 1
+		main.vista.centra_su(args[3] if args.size() > 3 else "N36")
+		main.vista.distanza = float(args[4]) if args.size() > 4 else 16.0
+		main._aggiorna()
+		await shot("frecce")
 	if modo == "regole":
 		main._mostra_regole()
 		await shot("regole")

@@ -316,6 +316,9 @@ func _piano_movimento(sfruttamento: bool) -> Array:
 		if m.lato(u["n"]) == l and Motore._terrestre(u["t"]):
 			difesa[u["h"]] = int(difesa.get(u["h"], 0)) + 1
 	var usate := {}
+	if l == "alleati":
+		for x in _presidio_egitto():
+			usate[x] = true
 	if not sfruttamento:
 		# 1. coprire i settori del fronte rimasti scoperti (anche verso i nemici potenziali)
 		for dec in _copri_fronte(l, presi, difesa, usate):
@@ -356,7 +359,156 @@ func _piano_movimento(sfruttamento: bool) -> Array:
 	return piano
 
 ## porti britannici da cui partono gli sbarchi sulla Manica
-const PORTI_INVASIONE := ["L22", "K21", "K24", "H24", "F26"]
+const PORTI_INVASIONE := ["L22", "K21", "K24", "H24", "F26", "AA7", "GG19"]
+## teatro mediterraneo
+const AFRICA := ["LIB", "EGI"]
+const PORTI_EGITTO := ["LL28", "LL31", "MM30"]
+const PORTI_LIBIA := ["II17", "KK21", "KK24"]
+const PORTI_ITALIA_SUD := ["Z23", "AA24", "DD21"]
+
+## forza terrestre in Libia ed Egitto: {"asse": n, "alleati": n, "ger": n, "gb_unita": n}
+func _forze_africa() -> Dictionary:
+	var out := {"asse": 0, "alleati": 0, "ger": 0, "gb_unita": 0, "ita": 0}
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		var h: String = u["h"]
+		if h == "USA" or not Motore._terrestre(u["t"]) or not (D.esagoni[h]["n"] in AFRICA):
+			continue
+		var l := m.lato(u["n"])
+		if l == "":
+			continue
+		out[l] = int(out[l]) + m.forza(uid)
+		if u["n"] == "GER":
+			out["ger"] = int(out["ger"]) + 1
+		if u["n"] == "ITA":
+			out["ita"] = int(out["ita"]) + m.forza(uid)
+		if u["n"] == "GB" and D.esagoni[h]["n"] == "EGI":
+			out["gb_unita"] = int(out["gb_unita"]) + 1
+	return out
+
+func _italia_contro_gb() -> bool:
+	return m.attiva("ITA") and m.in_guerra("ITA", "GB")
+
+## unità britanniche che restano a presidio dell'Egitto (non vengono ritirate né ridispiegate altrove)
+func _presidio_egitto() -> Dictionary:
+	var out := {}
+	if m.s["pot"]["ITA"]["arresa"]:
+		return out
+	var gb := []
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		if u["n"] == "GB" and Motore._terrestre(u["t"]) and u["h"] != "USA" and D.esagoni[u["h"]]["n"] == "EGI":
+			gb.append(uid)
+	var minimo := 3 if _italia_contro_gb() else 2
+	if gb.size() <= minimo:
+		for uid in gb:
+			out[uid] = true
+	# anche le guarnigioni coloniali francesi restano dove sono
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		if u["n"] == "FRA" and u["h"] != "USA" and D.esagoni[u["h"]]["n"] in ["TUN", "ALG", "MAR", "LIS"]:
+			out[uid] = true
+	return out
+
+## ridispiegamenti mediterranei: rinforzi britannici in Egitto, Afrika Korps e rinforzi italiani in Libia
+func _sr_mediterraneo(occ: Dictionary, usati: Dictionary) -> Array:
+	var piano := []
+	var l: String = m.s["lato"]
+	if m.s["pot"]["ITA"]["arresa"]:
+		return piano
+	var fa := _forze_africa()
+	if l == "alleati" and not m.s["pot"]["GB"]["arresa"]:
+		var obiettivo := 4
+		if _italia_contro_gb():
+			obiettivo = maxi(8, int(float(fa["asse"]) * 1.3) + 3)
+			# dal 1942 l'ottava armata passa all'offensiva: serve il doppio delle forze dell'Asse
+			if int(m.s["anno"]) >= 1942:
+				obiettivo = maxi(12, int(float(fa["asse"]) * 2.0) + 2)
+		var mancano := obiettivo - int(fa["alleati"])
+		var max_sr := mini(2 if int(m.s["anno"]) <= 1940 else 3, m.sr_rimasti("GB"))
+		if mancano <= 0 or max_sr <= 0:
+			return piano
+		var cand := []
+		for uid in m.s["u"]:
+			var u: Dictionary = m.s["u"][uid]
+			if u["n"] != "GB" or not Motore._terrestre(u["t"]) or usati.has(uid) or u["h"] == "USA":
+				continue
+			if D.esagoni[u["h"]]["n"] in AFRICA or u["h"] in ["AA7", "GG19"]:
+				continue
+			# Londra resta difesa
+			if u["h"] == "K23" and int(occ.get("K23", 0)) <= 1:
+				continue
+			cand.append(uid)
+		cand.sort_custom(func(a, b): return _priorita(a) > _priorita(b))
+		for uid in cand:
+			if max_sr <= 0 or mancano <= 0:
+				break
+			var dest := m.destinazioni_sr(uid)
+			for id in PORTI_EGITTO:
+				if dest.has(id) and int(occ.get(id, 0)) < 2:
+					piano.append({"t": "sr", "u": uid, "h": id})
+					occ[id] = int(occ.get(id, 0)) + 1
+					occ[m.s["u"][uid]["h"]] = int(occ.get(m.s["u"][uid]["h"], 1)) - 1
+					usati[uid] = true
+					max_sr -= 1
+					mancano -= m.forza(uid)
+					break
+		return piano
+	if l != "asse" or not _italia_contro_gb():
+		return piano
+	# Italia: tiene in Libia una forza almeno pari a quella britannica in Egitto
+	var porti_lib := []
+	for id in PORTI_LIBIA:
+		if m.lato(m.controllo(id)) == "asse":
+			porti_lib.append(id)
+	var per_potenza := {"ITA": 2, "GER": 2 if int(m.s["anno"]) >= 1941 and m.s["pot"]["FRA"]["arresa"] and int(fa["ger"]) < 3 else 0}
+	if int(fa["ita"]) >= maxi(8, int(fa["alleati"]) + 2):
+		per_potenza["ITA"] = 0
+	# finché la Francia combatte l'Italia rinforza la Libia solo se è in inferiorità
+	if not m.s["pot"]["FRA"]["arresa"] and int(fa["ita"]) >= int(fa["alleati"]):
+		per_potenza["ITA"] = 0
+	for p in ["GER", "ITA"]:
+		var n_sr := mini(int(per_potenza[p]), m.sr_rimasti(p))
+		if n_sr <= 0:
+			continue
+		var cand := []
+		for uid in m.s["u"]:
+			var u: Dictionary = m.s["u"][uid]
+			if u["n"] != p or not Motore._terrestre(u["t"]) or usati.has(uid) or u["h"] == "USA" or u["t"] == "rim":
+				continue
+			if D.esagoni[u["h"]]["n"] in AFRICA:
+				continue
+			# la Germania manda i corazzati, l'Italia ciò che ha in patria
+			if p == "GER" and not (u["t"] in ["cor", "fan"]):
+				continue
+			if p == "ITA" and D.esagoni[u["h"]]["n"] != "ITA":
+				continue
+			cand.append(uid)
+		# prima chi è già in un porto del sud Italia
+		cand.sort_custom(func(a, b): return int(m.s["u"][a]["h"] in PORTI_ITALIA_SUD) * 100 + _priorita(a) > int(m.s["u"][b]["h"] in PORTI_ITALIA_SUD) * 100 + _priorita(b))
+		for uid in cand:
+			if n_sr <= 0:
+				break
+			var dest := m.destinazioni_sr(uid)
+			var scelto := ""
+			for id in porti_lib:
+				if dest.has(id) and int(occ.get(id, 0)) < 2:
+					scelto = id
+					break
+			if scelto == "" and p == "GER":
+				# prima tappa: un porto dell'Italia meridionale
+				for id in PORTI_ITALIA_SUD:
+					if dest.has(id) and int(occ.get(id, 0)) < 2:
+						scelto = id
+						break
+			if scelto == "":
+				continue
+			piano.append({"t": "sr", "u": uid, "h": scelto})
+			occ[scelto] = int(occ.get(scelto, 0)) + 1
+			occ[m.s["u"][uid]["h"]] = int(occ.get(m.s["u"][uid]["h"], 1)) - 1
+			usati[uid] = true
+			n_sr -= 1
+	return piano
 
 func _invasione_attiva() -> bool:
 	return int(m.s["anno"]) >= 1943 and m.attiva("USA") and not m.s["pot"]["GB"]["arresa"]
@@ -1106,6 +1258,9 @@ func _piano_attacco(b: String, att0: Array, l: String) -> Dictionary:
 	var blitz: bool = l == "asse" and int(m.s["anno"]) <= 1941
 	if int(v["base"]) >= 6 and imp < 6.0 and not blitz:
 		soglia = 5
+	# guerra nel deserto: fronti sottili, si attacca anche a 3-2 contro difese deboli
+	if D.esagoni[b]["n"] in AFRICA and int(v["base"]) <= 6:
+		soglia = mini(soglia, 3)
 	if col < soglia:
 		return {}
 	var valore := float(col) * 3.0 + imp + float(v["base"]) * 0.5
@@ -1340,9 +1495,19 @@ func _piano_sr() -> Array:
 	for st in settori:
 		bisogno[st["h"]] = int(st["b"])
 	var usati_sr := {}
+	var bloccati := _presidio_egitto()
+	for x in bloccati:
+		usati_sr[x] = true
+	for d in _sr_mediterraneo(occ, usati_sr):
+		piano.append(d)
+	for x in bloccati:
+		usati_sr.erase(x)
 	if l == "alleati" and (_invasione_attiva() or (int(m.s["anno"]) == 1942 and m.attiva("USA"))):
 		for p in ["USA", "GB"]:
 			var n_sr := m.sr_rimasti(p)
+			for x in usati_sr:
+				if m.comandante(m.s["u"][x]["n"]) == p:
+					n_sr -= 1
 			var cand := []
 			for uid in m.s["u"]:
 				var u: Dictionary = m.s["u"][uid]
@@ -1377,7 +1542,7 @@ func _piano_sr() -> Array:
 		var cand := []
 		for uid in m.s["u"]:
 			var u: Dictionary = m.s["u"][uid]
-			if m.comandante(u["n"]) != p or not m.maggiore(u["n"]) or not Motore._terrestre(u["t"]) or usati_sr.has(uid):
+			if m.comandante(u["n"]) != p or not m.maggiore(u["n"]) or not Motore._terrestre(u["t"]) or usati_sr.has(uid) or bloccati.has(uid):
 				continue
 			var qui: String = u["h"]
 			if qui != "USA" and int(occ.get(qui, 0)) <= int(bisogno.get(qui, 0)):

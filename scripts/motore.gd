@@ -1014,7 +1014,7 @@ func raggiungibili(uid: String, sfruttamento := false) -> Dictionary:
 	if not sfruttamento and D.porti.has(start) and amico(n, controllo(start)):
 		var fl := _flotte_disponibili(start, comandante(n))
 		if fl >= int(u["a"]):
-			for id in _porti_e_coste_raggiungibili(start, 16):
+			for id in _porti_e_coste_raggiungibili(start, 16, n):
 				if out.has(id) or id == start or nemici_in(id, n):
 					continue
 				var c := controllo(id)
@@ -1064,13 +1064,18 @@ func _raggiungibili_mare(uid: String) -> Dictionary:
 			if int(D.esagoni[id]["c"]) <= 26 and amico(n, controllo(id)) and not nemici_in(id, n):
 				out[id] = 1
 		return out
-	for id in _porti_e_coste_raggiungibili(u["h"], 20):
+	for id in _porti_e_coste_raggiungibili(u["h"], 20, n):
 		if D.porti.has(id) and amico(n, controllo(id)) and not nemici_in(id, n):
 			out[id] = 1
 	return out
 
 ## esagoni costieri raggiungibili navigando al massimo per 'passi' esagoni di mare
-func _porti_e_coste_raggiungibili(da: String, passi: int) -> Array:
+## le flotte possono attraversare un porto amico per passare da un mare all'altro (canali, stretti,
+## penisole come il Cotentin, Kiel, Gibilterra, Port Said): n è la nazione che naviga ("" = nessun passaggio)
+## stretti che la griglia rappresenta come terra: il porto collega anche questi esagoni di mare
+const PASSAGGI := {"AA7": ["BB9", "AA11", "AA6", "Z7"]}
+
+func _porti_e_coste_raggiungibili(da: String, passi: int, n := "") -> Array:
 	var dist := {}
 	var coda := []
 	for v in D.esagoni[da]["vicini"]:
@@ -1078,17 +1083,47 @@ func _porti_e_coste_raggiungibili(da: String, passi: int) -> Array:
 			dist[v] = 1
 			coda.append(v)
 	var out := {}
+	var attraversati := {da: true}
+	# si parte da un porto-passaggio: anche i suoi mari aggiuntivi
+	if n != "" and PASSAGGI.has(da):
+		for c in PASSAGGI[da]:
+			if not dist.has(c):
+				dist[c] = 1
+				coda.append(c)
 	var i := 0
 	while i < coda.size():
 		var a: String = coda[i]
 		i += 1
-		for b in D.esagoni[a]["vicini"]:
+		var vic: Array = D.esagoni[a]["vicini"]
+		if n != "":
+			for pp in PASSAGGI:
+				if PASSAGGI[pp].has(a):
+					vic = vic + [pp]
+		for b in vic:
 			if D.esagoni[b]["t"] == 9:
 				if not dist.has(b) and dist[a] < passi:
 					dist[b] = dist[a] + 1
 					coda.append(b)
 			else:
 				out[b] = true
+				# passaggio attraverso un porto amico verso un altro mare
+				if n != "" and D.porti.has(b) and not attraversati.has(b) and dist[a] + 1 < passi and amico(n, controllo(b)) and not nemici_in(b, n):
+					attraversati[b] = true
+					for c in PASSAGGI.get(b, []):
+						if not dist.has(c):
+							dist[c] = dist[a] + 2
+							coda.append(c)
+					for c in D.esagoni[b]["vicini"]:
+						if D.esagoni[c]["t"] == 9:
+							if not dist.has(c):
+								dist[c] = dist[a] + 2
+								coda.append(c)
+						elif D.terra(c) and amico(n, controllo(c)) and not nemici_in(c, n):
+							# un esagono di terra amico in più (la Rocca di Gibilterra, il canale di Suez)
+							for e in D.esagoni[c]["vicini"]:
+								if D.esagoni[e]["t"] == 9 and not dist.has(e):
+									dist[e] = dist[a] + 3
+									coda.append(e)
 	return out.keys()
 
 func _flotte_disponibili(porto: String, p: String) -> int:
@@ -1835,7 +1870,7 @@ func destinazioni_sr(uid: String) -> Array:
 		if s["u"][x]["t"] == "flo" and comandante(s["u"][x]["n"]) == p:
 			flotte += forza(x)
 	if D.porti.has(u["h"]) and flotte >= forza(uid):
-		for id in _porti_e_coste_raggiungibili(u["h"], 40):
+		for id in _porti_e_coste_raggiungibili(u["h"], 90, n):
 			if D.porti.has(id) and amico(n, controllo(id)) and not _nemici_lato_in(id, l) and not _zoc_lato(id, l):
 				visti[id] = true
 	var dentro: bool = D.esagoni.has(u["h"]) and D.esagoni[u["h"]]["n"] in ["FRA", "BEL", "NED", "LUX"]

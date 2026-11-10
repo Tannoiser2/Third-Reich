@@ -35,10 +35,10 @@ const VALORE_COLONIE := {"MAR": 5, "ALG": 5, "TUN": 5, "LIS": 5, "LIB": 5, "ALB"
 const BRP_BASE := {"GER": 150, "ITA": 75, "GB": 125, "FRA": 85, "URSS": 90, "USA": 135}
 const CRESCITA := {"GER": 40, "ITA": 20, "GB": 40, "FRA": 30, "URSS": 30, "USA": 60}
 ## Ridispiegamenti strategici per turno
-const SR := {"GER": 6, "ITA": 3, "GB": 4, "FRA": 3, "URSS": 4, "USA": 5}
+const SR := {"GER": 8, "ITA": 3, "GB": 4, "FRA": 3, "URSS": 4, "USA": 5}
 
 ## Costo in BRP per fattore
-const COSTO := {"fan": 1, "rim": 1, "cor": 2, "par": 2, "avi": 5, "flo": 3}
+const COSTO := {"fan": 1, "rim": 1, "cor": 2, "par": 3, "avi": 3, "flo": 3}
 const COSTO_GUERRA_MAGGIORE := 35
 const COSTO_GUERRA_MINORE := 10
 const COSTO_OFFENSIVA := 15

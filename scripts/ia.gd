@@ -104,12 +104,16 @@ func _dichiarazioni() -> Dictionary:
 		var voglio := []
 		match p:
 			"GER":
+				# come i giocatori esperti: Olanda e Danimarca subito dopo la Polonia, poi Belgio e Lussemburgo
+				if t >= 1939 * 4 + 3 and m.s["min"]["POL"]["st"] == "conquistato":
+					voglio.append_array(["NED", "DAN"])
 				if t >= 1940 * 4 + 0:
-					voglio.append_array(["DAN", "NOR", "NED", "BEL", "LUX"])
+					voglio.append_array(["BEL", "LUX", "NOR"])
 				if t >= 1941 * 4 + 0:
 					voglio.append_array(["JUG", "GRE"])
 				# Barbarossa: dall'estate 1941, quando a est c'è una forza adeguata; comunque prima che attacchi l'URSS (1942)
-				if t >= 1941 * 4 + 1 and brp >= 35 + 15 and (_pronti_a_est() or t >= 1941 * 4 + 3):
+				var pronta: bool = m.s["pot"]["FRA"]["arresa"] and _pronti_a_est()
+				if t >= 1941 * 4 + 1 and brp >= 35 + 15 and (pronta or (t >= 1941 * 4 + 2 and _pronti_a_est()) or t >= 1941 * 4 + 3):
 					voglio.append("URSS")
 			"ITA":
 				if t >= 1940 * 4 + 1 or m.s["pot"]["FRA"]["arresa"]:
@@ -174,14 +178,26 @@ func _opzione(p: String) -> Dictionary:
 	if not m.offensiva_permessa(p):
 		buona = false
 		vuoti = false
+	# la Germania non spende in offensive i BRP che servono a dichiarare Barbarossa
+	if p == "GER" and int(m.s["anno"]) == 1941 and m.s["pot"]["FRA"]["arresa"] and not m.s["pot"]["GER"]["guerra"].has("URSS") and brp - costo < 50:
+		buona = false
+		vuoti = false
 	# l'URSS resta sulla difensiva nel primo inverno solo se non ha attacchi buoni
 	if (buona or vuoti) and brp >= costo:
 		return {"t": "opz", "p": p, "o": "off"}
+	# sbarco pronto: truppe nei porti d'invasione
+	if p in ["GB", "USA"] and _invasione_attiva() and brp >= costo:
+		var pronte := 0
+		for id in PORTI_INVASIONE:
+			pronte += m.terrestri_in(id).size()
+		if pronte >= 3:
+			return {"t": "opz", "p": p, "o": "off"}
 	if contatto:
 		return {"t": "opz", "p": p, "o": "log"}
 	# territori nemici da raggiungere: offensiva se ci sono unità vicine al confine e BRP abbondanti
 	var margine := 10 if m.lato(p) == "asse" or int(m.s["anno"]) >= 1942 else 30
-	if brp >= costo + margine and m.offensiva_permessa(p) and _vicini_al_nemico(p):
+	var per_barbarossa: bool = p == "GER" and int(m.s["anno"]) == 1941 and not m.s["pot"]["GER"]["guerra"].has("URSS") and brp - costo < 50
+	if brp >= costo + margine and m.offensiva_permessa(p) and _vicini_al_nemico(p) and not per_barbarossa:
 		return {"t": "opz", "p": p, "o": "off"}
 	return {"t": "opz", "p": p, "o": "pas"}
 
@@ -306,6 +322,11 @@ func _piano_movimento(sfruttamento: bool) -> Array:
 			piano.append(dec)
 		# 2. presidiare capitali e obiettivi vicini al nemico
 		piano = _presidi(piano, difesa, fronte, l, usate)
+		# 3. chi attacca dà il cambio in prima linea: le unità deboli arretrano, le forti avanzano
+		for d in piano:
+			usate[d["u"]] = true
+		for dec in _cambio_in_linea(l, presi, difesa, usate):
+			piano.append(dec)
 		for d in piano:
 			usate[d["u"]] = true
 	if not sfruttamento and l == "alleati" and int(m.s["anno"]) >= 1943 and m.attiva("USA"):
@@ -322,7 +343,7 @@ func _piano_movimento(sfruttamento: bool) -> Array:
 			"avi":
 				dec = _muovi_aereo(uid, fronte)
 			"flo":
-				dec = {}
+				dec = _muovi_flotta(uid)
 			_:
 				dec = _muovi_terrestre(uid, fronte, presi, difesa, sfruttamento, ob.get(uid, ""))
 		if dec.is_empty():
@@ -333,6 +354,56 @@ func _piano_movimento(sfruttamento: bool) -> Array:
 			difesa[u["h"]] = int(difesa.get(u["h"], 1)) - 1
 			difesa[dec["h"]] = int(difesa.get(dec["h"], 0)) + 1
 	return piano
+
+## porti britannici da cui partono gli sbarchi sulla Manica
+const PORTI_INVASIONE := ["L22", "K21", "K24", "H24", "F26"]
+
+func _invasione_attiva() -> bool:
+	return int(m.s["anno"]) >= 1943 and m.attiva("USA") and not m.s["pot"]["GB"]["arresa"]
+
+## fattori navali che mancano in un porto per imbarcare le truppe che vi si trovano (negativo = eccesso)
+func _deficit_navale(porto: String, escludi := "") -> int:
+	var truppe := 0
+	var navi := 0
+	for x in m.unita_in(porto):
+		if x == escludi:
+			continue
+		var u: Dictionary = m.s["u"][x]
+		if not (m.comandante(u["n"]) in ["GB", "USA"]):
+			continue
+		if u["t"] == "flo":
+			navi += m.forza(x)
+		elif Motore._terrestre(u["t"]):
+			truppe += m.forza(x)
+	return truppe + 2 - navi
+
+func _muovi_flotta(uid: String) -> Dictionary:
+	var u: Dictionary = m.s["u"][uid]
+	if not (m.comandante(u["n"]) in ["GB", "USA"]):
+		return {}
+	var qui: String = u["h"]
+	var rr := m.raggiungibili(uid)
+	var dalla_patria: bool = qui == "USA" or D.esagoni[qui]["n"] == "GB"
+	if not dalla_patria:
+		return {}
+	if not _invasione_attiva() and qui != "USA":
+		return {}
+	# resta se qui serve
+	if qui in PORTI_INVASIONE and _deficit_navale(qui, uid) >= 0:
+		return {}
+	# il porto d'invasione con il maggior bisogno di navi
+	var migliore := ""
+	var massimo := -999
+	for id in PORTI_INVASIONE:
+		if not rr.has(id) or id == qui:
+			continue
+		var dn := _deficit_navale(id)
+		if dn > massimo:
+			massimo = dn
+			migliore = id
+	if migliore == "" or (qui != "USA" and massimo <= 0):
+		return {}
+	return {"t": "muovi", "u": uid, "h": migliore}
 
 ## Sbarco anglo-americano: dalle navi in porto verso una costa nemica sguarnita, vicina agli obiettivi
 func _sbarco(usate: Dictionary, presi: Dictionary) -> Array:
@@ -361,9 +432,23 @@ func _sbarco(usate: Dictionary, presi: Dictionary) -> Array:
 	var obs := obiettivi("alleati")
 	for id in candidati:
 		var difesa := _minaccia(id, "alleati", ost)
-		if difesa > 10.0:
+		# forza disponibile per lo sbarco su questo tratto di costa
+		var forza := 0
+		var tratto := [id]
+		for v in D.esagoni[id]["terra"]:
+			if candidati.has(v):
+				tratto.append(v)
+		var unita_tratto := {}
+		for t in tratto:
+			for x in candidati[t]:
+				unita_tratto[x] = true
+		for x in unita_tratto:
+			forza += m.forza(x)
+		if float(forza) < difesa * 0.8 + 3.0 or unita_tratto.size() < 3:
 			continue
-		var v := _importanza(id) * 1.5 - difesa * 0.6 + float(candidati[id].size())
+		var v := _importanza(id) * 1.5 - difesa * 0.4 + float(mini(unita_tratto.size(), 6)) * 1.5
+		if D.porti.has(id):
+			v += 5.0
 		var vicino := 99
 		for o in obs:
 			var f := campo(o, "alleati")
@@ -373,25 +458,32 @@ func _sbarco(usate: Dictionary, presi: Dictionary) -> Array:
 		if v > mv:
 			mv = v
 			migliore = id
-	if migliore == "" or candidati[migliore].size() < 2:
+	if migliore == "":
 		return piano
-	var lista: Array = candidati[migliore]
-	lista.sort_custom(func(a, b): return _priorita(a) > _priorita(b))
-	for uid in lista.slice(0, 2):
-		piano.append({"t": "muovi", "u": uid, "h": migliore})
-		presi[migliore] = int(presi.get(migliore, 0)) + 1
-	# un secondo esagono accanto per allargare la testa di ponte
+	# fino a 6 unità: 2 nell'esagono scelto e 2 per ciascuno dei due esagoni costieri accanto
+	var tratto := [migliore]
 	for v in D.esagoni[migliore]["terra"]:
-		if not candidati.has(v) or not D.esagoni[v]["costa"]:
-			continue
+		if candidati.has(v) and tratto.size() < 3:
+			tratto.append(v)
+	var usati := {}
+	var fflotte := {}   # porto -> fattori navali ancora liberi
+	for t in tratto:
+		var lista: Array = candidati[t].duplicate()
+		lista.sort_custom(func(a, b): return _priorita(a) > _priorita(b))
 		var n := 0
-		for uid in candidati[v]:
-			if n >= 2 or lista.slice(0, 2).has(uid):
+		for uid in lista:
+			if n >= 2 or usati.has(uid):
 				continue
-			piano.append({"t": "muovi", "u": uid, "h": v})
+			var porto: String = m.s["u"][uid]["h"]
+			if not fflotte.has(porto):
+				fflotte[porto] = m._flotte_disponibili(porto, m.comandante(m.s["u"][uid]["n"]))
+			if int(fflotte[porto]) < m.forza(uid):
+				continue
+			fflotte[porto] = int(fflotte[porto]) - m.forza(uid)
+			usati[uid] = true
+			piano.append({"t": "muovi", "u": uid, "h": t})
+			presi[t] = int(presi.get(t, 0)) + 1
 			n += 1
-		if n > 0:
-			break
 	return piano
 
 # -------------------------------------------------------------------------------------
@@ -482,9 +574,15 @@ func fronte_settori(l: String) -> Array:
 		var mn := _minaccia(id, l, ost)
 		if mn <= 0.0:
 			continue
+		# minacce trascurabili (un paio di fattori di un paese minore) non tengono ferme le truppe
+		if mn < 2.5 and _importanza(id) < 6.0:
+			continue
 		var bisogno := 1
 		if mn >= 9.0 or _importanza(id) >= 6.0:
 			bisogno = 2
+		# chi è all'offensiva tiene solo uno schermo leggero: le forze servono per lo sfondamento
+		if m.opzione(c) == "off" and not str(D.esagoni[id]["tipo"]).contains("C"):
+			bisogno = 1
 		var prio := mn + _importanza(id) * 1.5 + (2.0 if D.esagoni[id]["t"] != 0 else 0.0)
 		out.append({"h": id, "b": bisogno, "p": prio})
 	out.sort_custom(func(a, b): return float(a["p"]) > float(b["p"]))
@@ -523,8 +621,10 @@ func _copri_fronte(l: String, presi: Dictionary, difesa: Dictionary, usate: Dict
 				if not rr_cache.has(uid):
 					rr_cache[uid] = m.raggiungibili(uid)
 				var rr: Dictionary = rr_cache[uid]
-				if rr.has(h) and int(rr[h]) >= 0 and int(rr[h]) < md and int(presi.get(h, 0)) + m.terrestri_in(h).size() < 2:
-					md = int(rr[h])
+				# per tenere la linea si usa la fanteria: i corazzati servono per attaccare
+				var costo := int(rr.get(h, -1)) + (6 if m.s["u"][uid]["t"] == "cor" else 0) + (2 if m.s["u"][uid]["t"] == "par" else 0)
+				if rr.has(h) and int(rr[h]) >= 0 and costo < md and int(presi.get(h, 0)) + m.terrestri_in(h).size() < 2:
+					md = costo
 					migliore = uid
 			if migliore == "":
 				break
@@ -577,8 +677,10 @@ func _peso_strategico(l: String, id: String, c: String) -> float:
 	if l == "asse":
 		if orig == "FRA" and not m.s["pot"]["FRA"]["arresa"]:
 			return 3.0 if nome == "Paris" else 1.8
-		if orig in ["BEL", "NED", "LUX", "DAN", "NOR"]:
+		if orig in ["BEL", "NED", "LUX"]:
 			return 1.5
+		if orig in ["DAN", "NOR"]:
+			return 0.5
 		if orig in ["JUG", "GRE"]:
 			return 1.8
 		if orig == "URSS":
@@ -624,9 +726,110 @@ func campo(obiettivo: String, l: String) -> Dictionary:
 	_campi[obiettivo] = dist
 	return dist
 
+func _a_contatto(id: String, n: String) -> bool:
+	for v in D.esagoni[id]["terra"]:
+		for x in m.terrestri_in(v):
+			if m.in_guerra(n, m.s["u"][x]["n"]) or m.in_guerra(m.comandante(n), m.s["u"][x]["n"]):
+				return true
+	return false
+
+func _cambio_in_linea(l: String, presi: Dictionary, difesa: Dictionary, usate: Dictionary) -> Array:
+	var piano := []
+	var deboli := []
+	var forti := []
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		if m.lato(u["n"]) != l or not Motore._terrestre(u["t"]) or u["h"] == "USA" or usate.has(uid) or not m.puo_muovere(uid):
+			continue
+		if m.opzione(u["n"]) != "off":
+			continue
+		var contatto := _a_contatto(u["h"], u["n"])
+		if contatto and m.forza(uid) <= 2 and u["t"] != "cor":
+			deboli.append(uid)
+		elif not contatto and m.forza(uid) >= 3:
+			forti.append(uid)
+	forti.sort_custom(func(a, b): return _priorita(a) > _priorita(b))
+	var rr_cache := {}
+	for w in deboli:
+		var h: String = m.s["u"][w]["h"]
+		# un'unità forte che può arrivare in quell'esagono
+		var scelto := ""
+		for f in forti:
+			if usate.has(f):
+				continue
+			if not rr_cache.has(f):
+				rr_cache[f] = m.raggiungibili(f)
+			if rr_cache[f].has(h) and int(rr_cache[f][h]) >= 0:
+				scelto = f
+				break
+		if scelto == "":
+			continue
+		# dove arretra la debole: un esagono amico vicino, non a contatto
+		var rw := m.raggiungibili(w)
+		var dietro := ""
+		var bd := 99
+		for id in rw:
+			if int(rw[id]) < 0 or _a_contatto(id, m.s["u"][w]["n"]) or m.lato(m.controllo(id)) != l:
+				continue
+			if int(presi.get(id, 0)) + m.terrestri_in(id).size() >= 2:
+				continue
+			if int(rw[id]) < bd:
+				bd = int(rw[id])
+				dietro = id
+		if dietro == "":
+			continue
+		usate[w] = true
+		usate[scelto] = true
+		piano.append({"t": "muovi", "u": w, "h": dietro})
+		piano.append({"t": "muovi", "u": scelto, "h": h})
+		presi[dietro] = int(presi.get(dietro, 0)) + 1
+		var da: String = m.s["u"][scelto]["h"]
+		difesa[da] = int(difesa.get(da, 1)) - 1
+	return piano
+
+## i tratti più deboli della linea nemica: lì si concentra lo sfondamento (Schwerpunkt)
+func punti_deboli(l: String) -> Dictionary:
+	var out := {}
+	var off := false
+	for p in m.potenze_del_lato(l):
+		if m.s["pot"][p]["opz"] == "off":
+			off = true
+	if not off:
+		return out
+	var cand := []
+	var visti := {}
+	for uid in m.s["u"]:
+		var u: Dictionary = m.s["u"][uid]
+		if m.lato(u["n"]) != l or not Motore._terrestre(u["t"]) or u["h"] == "USA":
+			continue
+		for v in D.esagoni[u["h"]]["terra"]:
+			if visti.has(v):
+				continue
+			visti[v] = true
+			var dif := m.terrestri_in(v)
+			if dif.is_empty():
+				continue
+			var nem := false
+			var fd := 0
+			for x in dif:
+				if m.in_guerra(u["n"], m.s["u"][x]["n"]) or m.in_guerra(m.comandante(u["n"]), m.s["u"][x]["n"]):
+					nem = true
+				fd += m.forza(x)
+			if not nem:
+				continue
+			if D.esagoni[v]["t"] != 0:
+				fd *= 2
+			cand.append([v, float(fd) - _importanza(v) * 0.3])
+	cand.sort_custom(func(a, b): return float(a[1]) < float(b[1]))
+	for c in cand.slice(0, 4):
+		out[c[0]] = 3.5
+	return out
+
 ## ogni unità punta all'obiettivo più conveniente del suo teatro, con un po' di bilanciamento
 func _assegna_obiettivi(l: String, unita: Array, usate: Dictionary) -> Dictionary:
 	var obs := obiettivi(l)
+	for k in punti_deboli(l):
+		obs[k] = maxf(float(obs.get(k, 0.0)), 3.5)
 	var out := {}
 	if obs.is_empty():
 		return out
@@ -643,7 +846,11 @@ func _assegna_obiettivi(l: String, unita: Array, usate: Dictionary) -> Dictionar
 			var f := campo(o, l)
 			if not f.has(u["h"]):
 				continue
-			var v := float(f[u["h"]]) - float(obs[o]) * 3.0 + float(carico.get(o, 0)) * 0.12
+			var pen := float(carico.get(o, 0)) * 0.3
+			# obiettivo sguarnito: basta un'unità
+			if int(carico.get(o, 0)) > 0 and m.terrestri_in(o).is_empty() and _forza_nemica_vicina(o, u["n"], 2) == 0:
+				pen += 12.0
+			var v := float(f[u["h"]]) - float(obs[o]) * 3.0 + pen
 			if v < mv:
 				mv = v
 				migliore = o
@@ -895,7 +1102,9 @@ func _piano_attacco(b: String, att0: Array, l: String) -> Dictionary:
 	var soglia := 4
 	if imp >= 6.0 or int(v["base"]) <= 2:
 		soglia = 4
-	if int(v["base"]) >= 6 and imp < 6.0:
+	# Blitzkrieg: nel 1939-41 la Germania accetta il 2-1 anche contro pile forti
+	var blitz: bool = l == "asse" and int(m.s["anno"]) <= 1941
+	if int(v["base"]) >= 6 and imp < 6.0 and not blitz:
 		soglia = 5
 	if col < soglia:
 		return {}
@@ -925,7 +1134,7 @@ func _piano_costruzione() -> Array:
 		var brp := int(m.s["pot"][p]["brp"])
 		var riserva := 15
 		if p == "GER" and int(m.s["anno"]) <= 1941 and not m.s["pot"]["GER"]["guerra"].has("URSS"):
-			riserva = 50
+			riserva = 80 if int(m.s["anno"]) == 1941 else 50
 		if p == "ITA" and not m.attiva("ITA"):
 			riserva = 50
 		var pool: Array = m.s["pool"][p].duplicate()
@@ -1008,6 +1217,9 @@ func _valore_unita(e: Array, p: String, budget: int) -> float:
 		"par":
 			return 1.5
 		"avi":
+			# la Germania costruisce aviazione presto: serve a raggiungere le colonne buone
+			if p == "GER" and int(m.s["anno"]) <= 1941 and budget >= 30:
+				return 6.0
 			return 2.0 if budget >= 60 else -1.0
 		"flo":
 			return 0.5 if budget >= 80 and p in ["GB", "USA"] else -1.0
@@ -1128,6 +1340,28 @@ func _piano_sr() -> Array:
 	for st in settori:
 		bisogno[st["h"]] = int(st["b"])
 	var usati_sr := {}
+	if l == "alleati" and (_invasione_attiva() or (int(m.s["anno"]) == 1942 and m.attiva("USA"))):
+		for p in ["USA", "GB"]:
+			var n_sr := m.sr_rimasti(p)
+			var cand := []
+			for uid in m.s["u"]:
+				var u: Dictionary = m.s["u"][uid]
+				if u["n"] != p or not Motore._terrestre(u["t"]) or u["h"] in PORTI_INVASIONE:
+					continue
+				if u["h"] == "USA" or (D.esagoni.has(u["h"]) and D.esagoni[u["h"]]["n"] == "GB"):
+					cand.append(uid)
+			cand.sort_custom(func(a, b): return _priorita(a) > _priorita(b))
+			for uid in cand:
+				if n_sr <= 0:
+					break
+				var dest := m.destinazioni_sr(uid)
+				for id in PORTI_INVASIONE:
+					if dest.has(id) and int(occ.get(id, 0)) < 2:
+						piano.append({"t": "sr", "u": uid, "h": id})
+						occ[id] = int(occ.get(id, 0)) + 1
+						usati_sr[uid] = true
+						n_sr -= 1
+						break
 	if l == "asse":
 		for d in _riequilibrio_tedesco(occ, m.sr_rimasti("GER")):
 			piano.append(d)
@@ -1135,8 +1369,9 @@ func _piano_sr() -> Array:
 	# forza verso ciascun obiettivo già presente nei dintorni (per mandare rinforzi dove servono)
 	for p in m.potenze_del_lato(l):
 		var n_sr := m.sr_rimasti(p)
-		if p == "GER":
-			n_sr -= usati_sr.size()
+		for x in usati_sr:
+			if m.comandante(m.s["u"][x]["n"]) == p:
+				n_sr -= 1
 		if n_sr <= 0:
 			continue
 		var cand := []
@@ -1150,7 +1385,8 @@ func _piano_sr() -> Array:
 			var d := int(fronte.get(qui, 99)) if qui != "USA" else 99
 			if d >= 2:
 				cand.append(uid)
-		cand.sort_custom(func(a, b): return _priorita(a) > _priorita(b))
+		# prima le unità più lontane dal fronte (le retrovie si svuotano verso il combattimento)
+		cand.sort_custom(func(a, b): return int(fronte.get(m.s["u"][a]["h"], 99)) * 10 + _priorita(a) > int(fronte.get(m.s["u"][b]["h"], 99)) * 10 + _priorita(b))
 		for uid in cand:
 			if n_sr <= 0:
 				break

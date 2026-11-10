@@ -410,7 +410,7 @@ func _mostra_regole() -> void:
 
 [b]Turno.[/b] Ogni stagione muove prima uno schieramento e poi l'altro. Fasi: dichiarazioni di guerra, scelta delle opzioni, movimento, combattimento, sfruttamento degli sfondamenti, costruzione, ridispiegamento strategico.
 
-[b]BRP.[/b] Sono la ricchezza delle potenze. Si spendono per dichiarare guerra (35 a una potenza maggiore, 10 a un paese minore), per l'offensiva (15) e per costruire unità (fanteria 1 per fattore, corazzati e aviotrasportati 2, flotte 3, aviazione 5). In primavera i BRP non spesi fanno crescere la base; contano anche i paesi conquistati e le colonie.
+[b]BRP.[/b] Sono la ricchezza delle potenze. Si spendono per dichiarare guerra (35 a una potenza maggiore, 10 a un paese minore), per l'offensiva (15) e per costruire unità (fanteria e rimpiazzi 1 per fattore, corazzati 2, aviotrasportati, flotte e aviazione 3). In primavera i BRP non spesi fanno crescere la base; contano anche i paesi conquistati e le colonie.
 
 [b]Opzioni.[/b] Offensiva: si può attaccare e sfondare. Logoramento: gratis, si tira sulla tabella del logoramento con i fattori a contatto del nemico. Passo: niente combattimenti. Nel 1939 Francia e Gran Bretagna non possono scegliere l'offensiva; fino al 1941 britannici e francesi non attaccano insieme e il corpo di spedizione britannico sul continente ha al massimo 4 unità.
 
@@ -640,7 +640,7 @@ func _passo_ia(r: Dictionary) -> void:
 ## dopo ogni decisione (umana, IA o arrivata dalla rete)
 func _dopo_decisione(d: Dictionary, res: Dictionary) -> void:
 	var t: String = d.get("t", "")
-	vista.tempo_anim = 0.3 * velocita if not umani.get(m.s["lato"], false) else 0.22
+	vista.tempo_anim = 0.18 * velocita if not umani.get(m.s["lato"], false) else 0.22
 	vista.aggiorna(m.s, true)
 	if t == "attacca" and res.has("risultato"):
 		var r: Dictionary = res["risultato"]

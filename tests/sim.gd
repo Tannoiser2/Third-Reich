@@ -25,7 +25,7 @@ func _initialize():
 				var f := m.applica({"t": "fine"})
 				rifiuti = 0
 		passi += 1
-		if not dumped and OS.get_environment("DUMP") != "" and m.data_testo() == OS.get_environment("DUMP") and r["k"] == "combattimento" and m.s["lato"] == OS.get_environment("DUMPL"):
+		if not dumped and OS.get_environment("DUMP") != "" and m.data_testo() == OS.get_environment("DUMP") and r["k"] == (OS.get_environment("DUMPK") if OS.get_environment("DUMPK") != "" else "combattimento") and m.s["lato"] == OS.get_environment("DUMPL"):
 			dumped = true
 			var f := FileAccess.open("/tmp/dump.json", FileAccess.WRITE)
 			f.store_string(JSON.stringify(m.s))

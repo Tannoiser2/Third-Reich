@@ -276,11 +276,30 @@ func aggiorna(st: Dictionary, anima := true, ignora := "") -> void:
 				dest = base + Vector3(i * lp * 0.09, 0.0 + i * (spess + 0.01), i * lp * 0.09)
 			var usato: bool = u.get("mv", false) and u.get("at", false)
 			_imposta_usata(nodo, u.get("us", false) and u["t"] in ["avi", "flo"])
-			if anima and nodo.position.distance_to(dest) > 0.01 and uid != ignora:
+			# confronto con l'ultima destinazione assegnata, non con la posizione a metà volo:
+			# così aggiornamenti ravvicinati (IA contro IA) non fanno rimbalzare le pedine
+			var dest_prec: Vector3 = nodo.get_meta("dest", nodo.position)
+			var es_prec: String = nodo.get_meta("es", h)
+			nodo.set_meta("dest", dest)
+			nodo.set_meta("es", h)
+			if dest_prec.distance_to(dest) < 0.01:
+				continue
+			if nodo.has_meta("tw"):
+				var tw_prec = nodo.get_meta("tw")
+				if tw_prec is Tween and (tw_prec as Tween).is_valid():
+					(tw_prec as Tween).kill()
+				nodo.remove_meta("tw")
+			if anima and uid != ignora:
 				var tw := create_tween()
-				var su := (nodo.position + dest) / 2 + Vector3(0, 1.2, 0)
-				tw.tween_property(nodo, "position", su, tempo_anim * 0.5)
-				tw.tween_property(nodo, "position", dest, tempo_anim * 0.5)
+				nodo.set_meta("tw", tw)
+				if es_prec != h:
+					# cambio di esagono: piccolo salto
+					var su := (nodo.position + dest) / 2 + Vector3(0, 0.8, 0)
+					tw.tween_property(nodo, "position", su, tempo_anim * 0.5)
+					tw.tween_property(nodo, "position", dest, tempo_anim * 0.5)
+				else:
+					# stesso esagono (pila riordinata): scivola senza saltare
+					tw.tween_property(nodo, "position", dest, tempo_anim * 0.4)
 			else:
 				nodo.position = dest
 	for uid in _pedine.keys():

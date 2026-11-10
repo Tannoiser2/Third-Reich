@@ -954,7 +954,10 @@ func puo_muovere(uid: String, sfruttamento := false) -> bool:
 	if not s["u"].has(uid):
 		return false
 	var u: Dictionary = s["u"][uid]
-	if lato(u["n"]) != s["lato"] or u["h"] == "USA":
+	if lato(u["n"]) != s["lato"]:
+		return false
+	# dagli Stati Uniti partono per mare solo flotte e aviazione; le truppe usano il ridispiegamento
+	if u["h"] == "USA" and (sfruttamento or not (u["t"] in ["flo", "avi"])):
 		return false
 	if sfruttamento:
 		return s["sfrutt"].has(uid) and not u["sf"]
@@ -1043,16 +1046,24 @@ func _raggiungibili_aria(uid: String) -> Dictionary:
 	for id in D.esagoni:
 		if not D.terra(id) or id == u["h"]:
 			continue
+		if u["h"] == "USA" and D.esagoni[id]["n"] != "GB":
+			continue
 		if u["h"] != "USA" and D.distanza(u["h"], id) > 8:
 			continue
 		if amico(n, controllo(id)) and not nemici_in(id, n):
-			out[id] = D.distanza(u["h"], id)
+			out[id] = D.distanza(u["h"], id) if u["h"] != "USA" else 1
 	return out
 
 func _raggiungibili_mare(uid: String) -> Dictionary:
 	var u: Dictionary = s["u"][uid]
 	var n: String = u["n"]
 	var out := {}
+	if u["h"] == "USA":
+		# attraverso l'Atlantico: verso i porti amici della costa atlantica
+		for id in D.porti:
+			if int(D.esagoni[id]["c"]) <= 26 and amico(n, controllo(id)) and not nemici_in(id, n):
+				out[id] = 1
+		return out
 	for id in _porti_e_coste_raggiungibili(u["h"], 20):
 		if D.porti.has(id) and amico(n, controllo(id)) and not nemici_in(id, n):
 			out[id] = 1

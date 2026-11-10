@@ -163,8 +163,13 @@ func _bottone(testo: String, azione: Callable, abilitato := true) -> Button:
 	b.text = testo
 	b.disabled = not abilitato
 	b.pressed.connect(azione)
-	b.custom_minimum_size = Vector2(0, 44)
 	b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# larghezza minima pari alla parola più lunga: il testo va a capo tra le parole, mai lettera per lettera
+	var largo := 0.0
+	if F_TESTO != null:
+		for parola in testo.split(" ", false):
+			largo = maxf(largo, F_TESTO.get_string_size(parola, HORIZONTAL_ALIGNMENT_LEFT, -1, 20).x)
+	b.custom_minimum_size = Vector2(minf(largo + 34.0, 360.0), 44)
 	return b
 
 func _separatore() -> HSeparator:
@@ -221,26 +226,37 @@ func _costruisci_ui() -> void:
 	pannello.offset_top = 76
 	pannello.offset_bottom = -10
 	radice.add_child(pannello)
+	# il pannello laterale contiene: ordini della fase, esagono sotto il puntatore e registro
+	var colonna := VBoxContainer.new()
+	colonna.add_theme_constant_override("separation", 6)
+	pannello.add_child(colonna)
 	var sc := ScrollContainer.new()
 	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	pannello.add_child(sc)
+	sc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	colonna.add_child(sc)
 	contenuto = VBoxContainer.new()
 	contenuto.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	contenuto.add_theme_constant_override("separation", 8)
 	sc.add_child(contenuto)
-	# registro in basso a sinistra
+	# esagono sotto il puntatore (sostituisce il riquadro che compariva sulla mappa)
+	info = PanelContainer.new()
+	info.add_theme_stylebox_override("panel", _stile(Color(0.88, 0.83, 0.72, 1.0), Color(0.55, 0.45, 0.35), 1, 3, 6))
+	info.custom_minimum_size = Vector2(0, 96)
+	info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	colonna.add_child(info)
+	lab_info = _etichetta("Passa sopra un esagono per vederne i dettagli.", 14, F_CORSIVO, Color(0.35, 0.3, 0.25))
+	lab_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.add_child(lab_info)
+	# registro degli eventi
 	var pl := PanelContainer.new()
-	pl.add_theme_stylebox_override("panel", _stile(Color(0.93, 0.89, 0.8, 0.9), C_ROSSO, 2, 4, 8))
-	pl.anchor_top = 1.0
-	pl.anchor_bottom = 1.0
-	pl.offset_left = 10
-	pl.offset_right = 700
-	pl.offset_top = -170
-	pl.offset_bottom = -10
-	radice.add_child(pl)
+	pl.add_theme_stylebox_override("panel", _stile(Color(0.93, 0.89, 0.8, 1.0), C_ROSSO, 2, 4, 6))
+	pl.custom_minimum_size = Vector2(0, 230)
+	colonna.add_child(pl)
 	lab_log = RichTextLabel.new()
 	lab_log.bbcode_enabled = true
 	lab_log.scroll_following = true
+	lab_log.add_theme_font_size_override("normal_font_size", 13)
+	lab_log.add_theme_font_size_override("bold_font_size", 14)
 	pl.add_child(lab_log)
 	# comandi della telecamera
 	comandi = VBoxContainer.new()
@@ -259,18 +275,6 @@ func _costruisci_ui() -> void:
 		b.custom_minimum_size = Vector2(110, 40)
 		b.add_theme_font_size_override("font_size", 15)
 		comandi.add_child(b)
-	# informazioni sull'esagono sotto il puntatore
-	info = PanelContainer.new()
-	info.add_theme_stylebox_override("panel", _stile(Color(0.93, 0.89, 0.8, 0.95), C_ROSSO, 2, 4, 8))
-	info.offset_left = 10
-	info.offset_top = 76
-	info.offset_right = 360
-	info.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	radice.add_child(info)
-	lab_info = _etichetta("", 15)
-	lab_info.custom_minimum_size = Vector2(330, 0)
-	info.add_child(lab_info)
-	info.visible = false
 	# avviso temporaneo (esiti dei combattimenti)
 	toast = PanelContainer.new()
 	toast.anchor_left = 0.5
@@ -298,7 +302,7 @@ func _mostra_ui_partita(v: bool) -> void:
 	barra.visible = v
 	pannello.visible = v
 	comandi.visible = v
-	lab_log.get_parent().visible = v
+	pass
 
 # =====================================================================================
 # Menu
@@ -416,7 +420,7 @@ func _mostra_regole() -> void:
 
 [b]Movimento.[/b] Pianura 1, montagna e palude 2. Entrando in una zona di controllo nemica (esagoni adiacenti a unità nemiche) ci si ferma. Al massimo 2 unità terrestri per esagono. Le unità in un porto con flotte sufficienti possono sbarcare su una costa raggiungibile per mare. L'aviazione si sposta fino a 8 esagoni.
 
-[b]Combattimento.[/b] Si attacca un esagono nemico adiacente; l'aviazione entro 4 esagoni aggiunge i suoi fattori (anche in difesa). Montagne, paludi e fiumi (se tutti gli attaccanti li attraversano) raddoppiano la difesa. Tabella: D difensore eliminato, A attaccante eliminato, Ex scambio, CA contrattacco del difensore. Se i corazzati vincono e avanzano si apre uno sfondamento: possono muovere ancora e attaccare di nuovo.
+[b]Combattimento.[/b] Si attacca un esagono nemico adiacente; l'aviazione entro 4 esagoni aggiunge i suoi fattori (anche in difesa). Montagne, paludi e fiumi (se tutti gli attaccanti li attraversano) raddoppiano la difesa. Tabella: D difensore eliminato, A attaccante eliminato, Ex scambio, CA contrattacco del difensore. Se i corazzati vincono e avanzano si apre uno sfondamento: possono muovere ancora e attaccare di nuovo, anche insieme alle unità che in questo turno non hanno ancora attaccato.
 
 [b]Rifornimenti.[/b] Le unità devono collegarsi via terra a città della patria, capitali o porti amici. Le unità isolate per due turni consecutivi sono eliminate.
 
@@ -645,7 +649,9 @@ func _dopo_decisione(d: Dictionary, res: Dictionary) -> void:
 	if t == "attacca" and res.has("risultato"):
 		var r: Dictionary = res["risultato"]
 		var testo: String = r.get("testo", "")
-		_mostra_toast(testo, 4.5)
+		# l'esito appare sulla mappa solo per gli attacchi del giocatore: quelli dell'IA vanno nel registro
+		if umani.get(m.s["lato"], false):
+			_mostra_toast(testo, 4.5)
 		vista.evidenzia("ultimo", [r["bersaglio"]])
 	elif t in ["muovi", "sr"]:
 		vista.evidenzia("ultimo", [d.get("h", "")])
@@ -794,18 +800,15 @@ func _indice_pool(p: String, e: Array) -> int:
 
 func _sopra_esagono(id: String) -> void:
 	_sopra = id
-	if id == "" or m == null or not in_partita:
-		info.visible = false
+	if m == null or not in_partita:
 		return
-	info.visible = true
+	if id == "":
+		id = sel_esagono
+	if id == "":
+		return
 	lab_info.text = _testo_esagono(id)
-	var mp := get_viewport().get_mouse_position()
-	info.position = mp + Vector2(18, 18)
-	var vs := get_viewport().get_visible_rect().size
-	if info.position.x + 360 > vs.x - 420:
-		info.position.x = mp.x - 380
-	if info.position.y + info.size.y > vs.y - 10:
-		info.position.y = vs.y - info.size.y - 10
+	lab_info.add_theme_color_override("font_color", Color(0.15, 0.12, 0.1))
+	lab_info.add_theme_font_override("font", F_TESTO)
 
 func _testo_esagono(id: String) -> String:
 	if id == "USA":
@@ -909,10 +912,9 @@ func _aggiorna_pannello(r: Dictionary) -> void:
 			_pannello_sr()
 
 func _info_selezione() -> void:
-	if sel_esagono == "":
-		return
-	contenuto.add_child(_separatore())
-	contenuto.add_child(_etichetta(_testo_esagono(sel_esagono), 16))
+	# l'esagono selezionato compare nel riquadro informativo del pannello
+	if sel_esagono != "":
+		_sopra_esagono(sel_esagono)
 
 func _spiega(t: String) -> void:
 	contenuto.add_child(_etichetta(t, 16, F_CORSIVO, Color(0.3, 0.27, 0.23)))
@@ -980,7 +982,7 @@ func _pannello_opzioni(r: Dictionary) -> void:
 
 func _pannello_movimento(sfr: bool) -> void:
 	if sfr:
-		_spiega("I corazzati entrati nello sfondamento possono muovere ancora e attaccare. Clic su un esagono nemico adiacente per attaccare.")
+		_spiega("I corazzati entrati nello sfondamento possono muovere ancora e attaccare di nuovo, insieme alle unità che non hanno ancora attaccato. Clic su un esagono nemico adiacente per attaccare.")
 	else:
 		_spiega("Clic su una tua unità e poi su un esagono verde. Le unità in un porto con flotte sufficienti possono sbarcare via mare.")
 	if sel_esagono != "" and m.unita_in(sel_esagono).size() > 0:

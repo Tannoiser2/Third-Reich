@@ -568,6 +568,7 @@ func _inizio_turno_giocatore() -> void:
 			u["at"] = false
 			u["us"] = false
 			u["sf"] = false
+			u["sa"] = false
 	for p in potenze_del_lato(l):
 		s["pot"][p]["opz"] = ""
 		s["sr_usati"][p] = 0
@@ -1209,9 +1210,17 @@ func attaccanti_possibili(bersaglio: String, sfruttamento := false) -> Array:
 	for v in D.esagoni[bersaglio]["terra"]:
 		for uid in terrestri_in(v):
 			var u: Dictionary = s["u"][uid]
-			if lato(u["n"]) != s["lato"] or u["at"] or int(u["nr"]) > 0:
+			if lato(u["n"]) != s["lato"] or int(u["nr"]) > 0:
 				continue
-			if sfruttamento and not s["sfrutt"].has(uid):
+			# nel combattimento di sfruttamento attaccano i corazzati che hanno sfondato (anche se hanno
+			# già combattuto, una volta sola) e le unità che non hanno ancora attaccato in questo turno
+			if sfruttamento:
+				if s["sfrutt"].has(uid):
+					if u.get("sa", false):
+						continue
+				elif u["at"]:
+					continue
+			elif u["at"]:
 				continue
 			if opzione(u["n"]) != "off":
 				continue
@@ -1304,6 +1313,8 @@ func _attacca(bersaglio: String, att: Array, aerei: Array, sfruttamento: bool) -
 		return {"ok": false, "msg": "rapporto inferiore a 1 contro 4"}
 	for uid in a:
 		s["u"][uid]["at"] = true
+		if sfruttamento:
+			s["u"][uid]["sa"] = true
 	for uid in av:
 		s["u"][uid]["us"] = true
 	for uid in v["aerei_dif"]:

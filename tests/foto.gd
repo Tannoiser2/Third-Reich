@@ -51,6 +51,21 @@ func _run():
 			main.vista.distanza = 12
 		main._aggiorna()
 		await shot("attacco")
+	if modo == "mov":
+		# fase di movimento della Germania con un'unità selezionata
+		main.m.applica({"t": "fine"})
+		main.m.applica({"t": "opz", "p": "GER", "o": "off"})
+		main.m.applica({"t": "opz", "p": "ITA", "o": "pas"})
+		main._aggiorna()
+		await shot("mov")
+		for uid in main.m.s["u"]:
+			if main.m.s["u"][uid]["n"] == "GER" and main.m.puo_muovere(uid):
+				main._clic_esagono(main.m.s["u"][uid]["h"])
+				break
+		await shot("mov2")
+	if modo == "regole":
+		main._mostra_regole()
+		await shot("regole")
 	if modo == "prova":
 		for n in ["JUG", "HUN", "RUM", "BUL", "FIN", "SWE", "TUR", "SPA"]:
 			main.m._nuova_unita(n, "fan", 2 if n != "BUL" else 1, 3, ["L29", "L30", "M29", "M30", "N29", "N30", "O29", "O30"][["JUG", "HUN", "RUM", "BUL", "FIN", "SWE", "TUR", "SPA"].find(n)])

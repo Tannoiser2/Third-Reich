@@ -211,11 +211,15 @@ func _pronti_a_est() -> bool:
 		var u: Dictionary = m.s["u"][uid]
 		if not Motore._terrestre(u["t"]) or u["h"] == "USA":
 			continue
-		if m.lato(u["n"]) == "asse" and int(d_est.get(u["h"], 99)) <= 3:
+		# conta chi può raggiungere il confine e attaccare nel primo turno di guerra
+		var portata := 5 if u["t"] == "cor" else 4
+		if m.lato(u["n"]) == "asse" and int(d_est.get(u["h"], 99)) <= portata:
 			asse += m.forza(uid)
 		elif u["n"] == "URSS" and int(d_asse.get(u["h"], 99)) <= 4:
 			sov += m.forza(uid)
-	return asse >= 40 and float(asse) >= float(sov) * 0.5
+	# in autunno si accetta un rapporto un po' più basso pur di non attaccare in inverno
+	var rapporto := 0.4 if int(m.s["stag"]) >= 2 else 0.5
+	return asse >= 40 and float(asse) >= float(sov) * rapporto
 
 func _vicini_al_nemico(p: String) -> bool:
 	var f := _distanza_fronte(m.lato(p))
@@ -317,6 +321,9 @@ func _piano_movimento(sfruttamento: bool) -> Array:
 		if m.lato(u["n"]) == l and Motore._terrestre(u["t"]):
 			difesa[u["h"]] = int(difesa.get(u["h"], 0)) + 1
 	var usate := {}
+	if not sfruttamento:
+		for x in _guarnigioni_capitali(l):
+			usate[x] = true
 	if l == "alleati":
 		for x in _presidio_egitto():
 			usate[x] = true
@@ -378,6 +385,33 @@ const PORTI_LIBIA := ["II17", "KK21", "KK24"]
 const PORTI_ITALIA_SUD := ["Z23", "AA24", "DD21"]
 
 ## forza terrestre in Libia ed Egitto: {"asse": n, "alleati": n, "ger": n, "gb_unita": n}
+## la strada costiera del deserto, da Tripoli a Suez
+const CATENA_AFRICA := ["II17", "KK18", "MM20", "KK21", "KK24", "LL26", "LL28", "MM29", "MM30"]
+
+## obiettivo comune per tutte le unità di uno schieramento nel deserto: si avanza lungo la costa
+## se si è nettamente più forti, altrimenti si tiene il caposaldo costiero più avanzato
+func obiettivo_deserto(l: String) -> String:
+	var fa := _forze_africa()
+	var mie := float(fa[l])
+	var loro := float(fa["alleati" if l == "asse" else "asse"])
+	if mie <= 0.0:
+		return ""
+	var catena: Array = CATENA_AFRICA.duplicate()
+	if l == "alleati":
+		catena.reverse()   # gli Alleati avanzano verso ovest
+	# il primo caposaldo non nostro lungo la direzione di marcia
+	var ultimo_mio := ""
+	var primo_nemico := ""
+	for id in catena:
+		if m.lato(m.controllo(id)) == l:
+			ultimo_mio = id
+		elif primo_nemico == "":
+			primo_nemico = id
+			break
+	if primo_nemico != "" and (mie >= loro * 1.4 + 2.0 or loro <= 0.0):
+		return primo_nemico
+	return ultimo_mio if ultimo_mio != "" else primo_nemico
+
 func _forze_africa() -> Dictionary:
 	var out := {"asse": 0, "alleati": 0, "ger": 0, "gb_unita": 0, "ita": 0}
 	for uid in m.s["u"]:
@@ -401,6 +435,26 @@ func _italia_contro_gb() -> bool:
 	return m.attiva("ITA") and m.in_guerra("ITA", "GB")
 
 ## unità britanniche che restano a presidio dell'Egitto (non vengono ritirate né ridispiegate altrove)
+## ogni capitale tiene sempre almeno un'unità: non la si sposta né la si ridispiega
+func _guarnigioni_capitali(l: String) -> Dictionary:
+	var out := {}
+	for p in m.potenze_del_lato(l):
+		# la Francia difende Parigi con la manovra, non con una guarnigione fissa
+		if not m.maggiore(p) or m.s["pot"][p]["arresa"] or p == "FRA":
+			continue
+		var cap: String = D.capitali.get(p, "")
+		if cap == "" or m.controllo(cap) != p:
+			continue
+		var scelta := ""
+		for x in m.terrestri_in(cap):
+			if m.lato(m.s["u"][x]["n"]) != l:
+				continue
+			if scelta == "" or m.forza(x) < m.forza(scelta) or m.s["u"][scelta]["t"] == "cor":
+				scelta = x
+		if scelta != "":
+			out[scelta] = true
+	return out
+
 func _presidio_egitto() -> Dictionary:
 	var out := {}
 	if m.s["pot"]["ITA"]["arresa"]:
@@ -1111,11 +1165,20 @@ func _assegna_obiettivi(l: String, unita: Array, usate: Dictionary) -> Dictionar
 	for k in punti_deboli(l):
 		obs[k] = maxf(float(obs.get(k, 0.0)), 3.5)
 	var out := {}
+	# nel deserto tutti seguono la strada costiera verso lo stesso caposaldo
+	var ob_des := obiettivo_deserto(l) if not m.s["pot"]["ITA"]["arresa"] else ""
+	if ob_des != "":
+		for uid in unita:
+			var u: Dictionary = m.s["u"][uid]
+			if usate.has(uid) or not Motore._terrestre(u["t"]) or u["h"] == "USA":
+				continue
+			if D.esagoni[u["h"]]["n"] in AFRICA:
+				out[uid] = ob_des
 	if obs.is_empty():
 		return out
 	var carico := {}
 	for uid in unita:
-		if usate.has(uid):
+		if usate.has(uid) or out.has(uid):
 			continue
 		var u: Dictionary = m.s["u"][uid]
 		if not Motore._terrestre(u["t"]) or u["h"] == "USA":
@@ -1152,7 +1215,7 @@ func _presidi(piano: Array, difesa: Dictionary, fronte: Dictionary, l: String, u
 			continue
 		var limite := 5
 		if str(D.esagoni[id]["tipo"]).contains("C"):
-			limite = 12
+			limite = 99
 		if int(fronte.get(id, 99)) > limite or int(difesa.get(id, 0)) > 0:
 			continue
 		# l'unità più vicina che può arrivarci
@@ -1386,9 +1449,6 @@ func _piano_attacco(b: String, att0: Array, l: String) -> Dictionary:
 	var blitz: bool = l == "asse" and int(m.s["anno"]) <= 1941
 	if int(v["base"]) >= 6 and imp < 6.0 and not blitz:
 		soglia = 5
-	# guerra nel deserto: fronti sottili, si attacca anche a 3-2 contro difese deboli
-	if D.esagoni[b]["n"] in AFRICA and int(v["base"]) <= 6:
-		soglia = mini(soglia, 3)
 	if col < soglia:
 		return {}
 	var valore := float(col) * 3.0 + imp + float(v["base"]) * 0.5
@@ -1633,6 +1693,8 @@ func _piano_sr() -> Array:
 		bisogno[st["h"]] = int(st["b"])
 	var usati_sr := {}
 	var bloccati := _presidio_egitto()
+	for x in _guarnigioni_capitali(l):
+		bloccati[x] = true
 	for x in bloccati:
 		usati_sr[x] = true
 	for d in _sr_mediterraneo(occ, usati_sr):

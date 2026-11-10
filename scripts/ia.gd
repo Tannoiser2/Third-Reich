@@ -1793,7 +1793,11 @@ func _piano_costruzione() -> Array:
 		var brp := int(m.s["pot"][p]["brp"])
 		var riserva := 15
 		if p == "GER" and int(m.s["anno"]) <= 1941 and not m.s["pot"]["GER"]["guerra"].has("URSS"):
-			riserva = 80 if int(m.s["anno"]) == 1941 else 50
+			# nel 1941 si tengono i BRP per dichiarare Barbarossa (35) e l'offensiva (15);
+			# d'inverno, rimandata Barbarossa alla primavera, si spende tutto (in primavera arrivano i BRP nuovi)
+			riserva = 50
+			if int(m.s["anno"]) == 1941 and int(m.s["stag"]) == 3:
+				riserva = 15
 		if p == "ITA" and not m.attiva("ITA"):
 			riserva = 50
 		var pool: Array = m.s["pool"][p].duplicate()
@@ -1880,8 +1884,11 @@ func _valore_unita(e: Array, p: String, budget: int) -> float:
 			return 1.5
 		"avi":
 			# la Germania costruisce aviazione presto: serve a raggiungere le colonne buone
-			if p == "GER" and int(m.s["anno"]) <= 1941 and budget >= 30:
-				return 6.0
+			# per la Germania l'aviazione è la chiave dello sfondamento: viene prima dei corazzati
+			if p == "GER" and budget >= 30:
+				return 9.5
+			if p == "ITA" and budget >= 40:
+				return 5.0
 			return 2.0 if budget >= 60 else -1.0
 		"flo":
 			return 0.5 if budget >= 80 and p in ["GB", "USA"] else -1.0

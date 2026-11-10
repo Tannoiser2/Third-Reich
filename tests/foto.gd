@@ -83,6 +83,22 @@ func _run():
 		main.vista.distanza = float(args[4]) if args.size() > 4 else 16.0
 		main._aggiorna()
 		await shot("frecce")
+	if modo == "tabella":
+		main.m.applica({"t": "fine"})
+		main.m.applica({"t": "opz", "p": "GER", "o": "off"})
+		main.m.applica({"t": "opz", "p": "ITA", "o": "pas"})
+		main.m.applica({"t": "fine"})
+		var bers: Array = main._bersagli(false)
+		main.vista.centra_su(bers[0])
+		main.vista.distanza = 12
+		main._prepara_attacco(bers[0], false)
+		main._aggiorna()
+		await main._decidi({"t": "attacca", "h": main.attacco["h"], "u": main.attacco["u"], "av": main.attacco.get("av", [])})
+		print("tabella visibile=", main.tabella.visible, " toast=", main.toast.visible, " figli=", main.tabella.get_child_count(), " mostra=", main.mostra_tabelle, " vel=", main.velocita)
+		for i in 12: await process_frame
+		print("dopo: tabella visibile=", main.tabella.visible, " rect=", main.tabella.get_global_rect(), " vis_tree=", main.tabella.is_visible_in_tree(), " mod=", main.tabella.modulate, " off=", main.tabella.offset_top, ",", main.tabella.offset_bottom, " anch=", main.tabella.anchor_top, " par=", main.tabella.get_parent().get_global_rect(), " min=", main.tabella.get_combined_minimum_size())
+		root.get_viewport().get_texture().get_image().save_png("/tmp/shot_tabella.png")
+		print("shot tabella")
 	if modo == "regole":
 		main._mostra_regole()
 		await shot("regole")

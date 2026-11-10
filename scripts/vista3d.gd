@@ -231,7 +231,7 @@ func freccia(da: String, a: String, colore: Color, spessore := 1.0, arco := 0.0,
 	p0 = p0 + n * r * 0.15
 	p2 = p2 - n * r * 0.5
 	var base_y := 0.45
-	var w := r * 0.3 * spessore
+	var w := r * 0.15 * spessore
 	var passi := 24
 	var punti := []
 	for i in passi + 1:
@@ -242,11 +242,11 @@ func freccia(da: String, a: String, colore: Color, spessore := 1.0, arco := 0.0,
 	_disegna_punti(punti, colore, r, spessore, tratteggio)
 
 func _disegna_punti(punti: Array, colore: Color, r: float, spessore: float, tratteggio: bool) -> void:
-	var w := r * 0.3 * spessore
+	var w := r * 0.15 * spessore
 	var lung := 0.0
 	for i in punti.size() - 1:
 		lung += (punti[i + 1] - punti[i]).length()
-	var testa := minf(r * 0.6 * spessore, lung * 0.45)
+	var testa := minf(r * 0.42 * spessore, lung * 0.4)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA

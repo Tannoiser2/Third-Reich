@@ -1376,6 +1376,9 @@ func _attacca(bersaglio: String, att: Array, aerei: Array, sfruttamento: bool) -
 			col = clampi(col - n, 0, 7)
 			var d2 := _dado()
 			var e2: String = Dati.CRT[d2 - 1][col]
+			risultato["ca_col"] = col
+			risultato["ca_dado"] = d2
+			risultato["ca_esito"] = e2
 			testo += "; contrattacco %s, dado %d: " % [Dati.COLONNE[col], d2]
 			match e2:
 				"D":
@@ -1526,6 +1529,8 @@ func _logoramento() -> void:
 		var col := mini(6, int((fattori - 1) / 10))
 		var dado := _dado()
 		var r: Array = Dati.LOGORAMENTO[dado - 1][col]
+		# per la grafica: l'ultimo tiro sulla tabella del logoramento
+		s["ultimo_logoramento"] = {"n": int(s.get("ultimo_logoramento", {}).get("n", 0)) + 1, "p": p, "fattori": fattori, "col": col, "dado": dado, "c": r[0], "h": r[1]}
 		var c_perdite: int = r[0]
 		var h_esagoni: int = r[1]
 		var lista := nemici.keys()

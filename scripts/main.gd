@@ -46,6 +46,12 @@ var modo := "advanced"
 var umani := {"asse": true, "alleati": false}
 var livello := "normale"
 var velocita := 1.0
+var mostra_tabelle := true      # tabella dei combattimenti e del logoramento animata a ogni tiro
+var tabella: PanelContainer
+var _tab_tween: Tween
+var _attesa_tabella := 0.0
+var _ultimo_log_visto := 0
+var bottone_tabelle: Button
 var in_partita := false
 var online := false
 var mio_lato := ""
@@ -210,6 +216,11 @@ func _costruisci_ui() -> void:
 	var sp := Control.new()
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hb.add_child(sp)
+	bottone_tabelle = _bottone("", _cambia_tabelle)
+	bottone_tabelle.custom_minimum_size = Vector2(150, 40)
+	bottone_tabelle.add_theme_font_size_override("font_size", 15)
+	hb.add_child(bottone_tabelle)
+	_carica_preferenze()
 	box_brp = HBoxContainer.new()
 	box_brp.add_theme_constant_override("separation", 14)
 	hb.add_child(box_brp)
@@ -275,6 +286,19 @@ func _costruisci_ui() -> void:
 		b.custom_minimum_size = Vector2(110, 40)
 		b.add_theme_font_size_override("font_size", 15)
 		comandi.add_child(b)
+	# tabella dei risultati animata (in basso a sinistra sulla mappa)
+	tabella = PanelContainer.new()
+	tabella.add_theme_stylebox_override("panel", _stile(Color(0.95, 0.91, 0.82, 0.97), C_ROSSO, 2, 4, 10))
+	tabella.anchor_top = 1.0
+	tabella.anchor_bottom = 1.0
+	tabella.offset_left = 12
+	tabella.offset_top = -12
+	tabella.offset_bottom = -12
+	tabella.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	tabella.mouse_filter = Control.MOUSE_FILTER_STOP
+	tabella.gui_input.connect(func(ev): if ev is InputEventMouseButton and ev.pressed: tabella.visible = false)
+	tabella.visible = false
+	radice.add_child(tabella)
 	# avviso temporaneo (esiti dei combattimenti)
 	toast = PanelContainer.new()
 	toast.anchor_left = 0.5
@@ -641,6 +665,10 @@ func _passo_ia(r: Dictionary) -> void:
 			_pausa = 0.35 * velocita
 		_:
 			_pausa = 0.25 * velocita
+	# l'IA aspetta che la tabella abbia mostrato il risultato
+	if _attesa_tabella > 0.0:
+		_pausa = maxf(_pausa, _attesa_tabella)
+		_attesa_tabella = 0.0
 
 ## dopo ogni decisione (umana, IA o arrivata dalla rete)
 ## posizioni da ricordare prima che una decisione sposti le pedine (per le frecce)
@@ -701,6 +729,186 @@ func _frecce_decisione(d: Dictionary, res: Dictionary, prima: Dictionary) -> voi
 	elif t == "muovi" and prima.get("tipo", "") == "avi":
 		vista.freccia(prima["da"], d.get("h", ""), Color(1.0, 0.85, 0.15, 0.7), 0.5, 0.8, 0.0, true)
 
+# -------------------------------------------------------------------------------------
+# Tabelle animate (combattimento e logoramento)
+# -------------------------------------------------------------------------------------
+
+func _carica_preferenze() -> void:
+	var cf := ConfigFile.new()
+	if cf.load("user://preferenze_terzoreich.cfg") == OK:
+		mostra_tabelle = bool(cf.get_value("grafica", "tabelle", true))
+	_aggiorna_bottone_tabelle()
+
+func _cambia_tabelle() -> void:
+	mostra_tabelle = not mostra_tabelle
+	var cf := ConfigFile.new()
+	cf.load("user://preferenze_terzoreich.cfg")
+	cf.set_value("grafica", "tabelle", mostra_tabelle)
+	cf.save("user://preferenze_terzoreich.cfg")
+	if not mostra_tabelle and tabella != null:
+		tabella.visible = false
+	_aggiorna_bottone_tabelle()
+
+func _aggiorna_bottone_tabelle() -> void:
+	if bottone_tabelle != null:
+		bottone_tabelle.text = "Tabelle: sì" if mostra_tabelle else "Tabelle: no"
+
+const DESCR_CRT := {"D": "difensore eliminato", "A": "attaccante eliminato", "Ex": "scambio",
+	"CA": "contrattacco del difensore", "CA1": "contrattacco del difensore (colonna -1)",
+	"CA2": "contrattacco del difensore (colonna -2)", "CA3": "contrattacco del difensore (colonna -3)"}
+const DESCR_CA := {"D": "attaccanti eliminati", "A": "il contrattacco fallisce, difensori eliminati", "Ex": "scambio"}
+
+func _tabella_combattimento(r: Dictionary) -> void:
+	if not mostra_tabelle or velocita <= 0.0 or tabella == null:
+		return
+	var esito: String = r.get("esito", "")
+	var tit := "Combattimento: %d contro %d" % [int(r.get("att", 0)), int(r.get("dif", 0))]
+	var passi := [{"col": int(r["col"]), "dado": int(r["dado"]), "tit": tit,
+		"esito": "%s: %s" % [esito, DESCR_CRT.get(esito, esito)]}]
+	if r.has("ca_col"):
+		var e2: String = r["ca_esito"]
+		passi.append({"col": int(r["ca_col"]), "dado": int(r["ca_dado"]), "tit": "Contrattacco del difensore",
+			"esito": "%s: %s" % [e2, DESCR_CA.get(e2, e2)]})
+	var righe := []
+	for riga in Dati.CRT:
+		righe.append(riga)
+	_attesa_tabella = _anima_tabella("TABELLA DEI COMBATTIMENTI", Dati.COLONNE, righe, passi)
+
+func _tabella_logoramento(ul: Dictionary) -> void:
+	if not mostra_tabelle or velocita <= 0.0 or tabella == null:
+		return
+	var colonne := ["1-10", "11-20", "21-30", "31-40", "41-50", "51-60", "61+"]
+	var righe := []
+	for riga in Dati.LOGORAMENTO:
+		var rr := []
+		for v in riga:
+			rr.append("%d / %d" % [int(v[0]), int(v[1])])
+		righe.append(rr)
+	var passi := [{"col": int(ul["col"]), "dado": int(ul["dado"]),
+		"tit": "Logoramento %s: %d fattori a contatto" % [Dati.nome(ul["p"]), int(ul["fattori"])],
+		"esito": "%d fattori nemici eliminati, %d esagoni conquistati" % [int(ul["c"]), int(ul["h"])]}]
+	_attesa_tabella = maxf(_attesa_tabella, _anima_tabella("TABELLA DEL LOGORAMENTO (perdite / esagoni)", colonne, righe, passi))
+
+## Mostra una tabella con la colonna evidenziata e una riga che scorre fino al tiro del dado;
+## all'incrocio si evidenzia il risultato. Restituisce la durata dell'animazione.
+func _anima_tabella(nome: String, colonne: Array, righe: Array, passi: Array) -> float:
+	if _tab_tween != null and _tab_tween.is_valid():
+		_tab_tween.kill()
+	for c in tabella.get_children():
+		c.queue_free()
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 4)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tabella.add_child(v)
+	v.add_child(titolo(nome, 17))
+	var lab_tit := _etichetta("", 15, F_GRASSETTO)
+	v.add_child(lab_tit)
+	var g := GridContainer.new()
+	g.columns = colonne.size() + 1
+	g.add_theme_constant_override("h_separation", 2)
+	g.add_theme_constant_override("v_separation", 2)
+	g.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(g)
+	var base := Color(0.88, 0.83, 0.72)
+	var celle := []   # [riga][colonna] -> StyleBoxFlat
+	var etich := []
+	# intestazione
+	g.add_child(_cella("Dado", Color(0.25, 0.22, 0.18), Color(0.95, 0.9, 0.78))[0])
+	var testa := []
+	for c in colonne:
+		var ce := _cella(str(c), Color(0.25, 0.22, 0.18), Color(0.95, 0.9, 0.78))
+		g.add_child(ce[0])
+		testa.append(ce[1])
+	for i in righe.size():
+		var riga_s := []
+		var riga_l := []
+		var cd := _cella(str(i + 1), Color(0.35, 0.31, 0.26), Color(0.95, 0.9, 0.78))
+		g.add_child(cd[0])
+		riga_s.append(cd[1])
+		riga_l.append(cd[2])
+		for j in colonne.size():
+			var ce := _cella(str(righe[i][j]), base, C_INCHIOSTRO)
+			g.add_child(ce[0])
+			riga_s.append(ce[1])
+			riga_l.append(ce[2])
+		celle.append(riga_s)
+		etich.append(riga_l)
+	var lab_esito := _etichetta("", 17, F_GRASSETTO, Color(0.6, 0.08, 0.05))
+	v.add_child(lab_esito)
+	tabella.visible = true
+	tabella.offset_right = tabella.offset_left + 70 + 64 * colonne.size()
+	_sistema_tabella.call_deferred()
+	# animazione
+	var umano: bool = umani.get(m.s["lato"], false)
+	var passo_t := 0.13 if umano else 0.09
+	var tenuta := 1.6 if umano else 0.9
+	_tab_tween = create_tween()
+	var durata := 0.0
+	for p in passi:
+		var col: int = int(p["col"])
+		var dado: int = int(p["dado"])
+		var tit: String = p["tit"]
+		var es: String = p["esito"]
+		_tab_tween.tween_callback(func():
+			lab_tit.text = tit
+			lab_esito.text = ""
+			for i in celle.size():
+				for j in range(1, celle[i].size()):
+					celle[i][j].bg_color = base
+					etich[i][j].add_theme_color_override("font_color", C_INCHIOSTRO)
+				celle[i][col + 1].bg_color = Color(0.98, 0.84, 0.42))
+		_tab_tween.tween_interval(0.25)
+		durata += 0.25
+		for i in dado:
+			var ii := i
+			_tab_tween.tween_callback(func():
+				for k in celle.size():
+					celle[k][0].bg_color = Color(0.35, 0.31, 0.26)
+					for j in range(1, celle[k].size()):
+						if j != col + 1:
+							celle[k][j].bg_color = base
+				celle[ii][0].bg_color = Color(0.2, 0.4, 0.75)
+				for j in range(1, celle[ii].size()):
+					if j != col + 1:
+						celle[ii][j].bg_color = Color(0.74, 0.83, 0.95))
+			_tab_tween.tween_interval(passo_t)
+			durata += passo_t
+		_tab_tween.tween_callback(func():
+			celle[dado - 1][col + 1].bg_color = Color(0.72, 0.1, 0.06)
+			etich[dado - 1][col + 1].add_theme_color_override("font_color", Color(1, 0.97, 0.9))
+			lab_esito.text = "Dado %d: %s" % [dado, es])
+		_tab_tween.tween_interval(tenuta)
+		durata += tenuta
+	var ultimo := _tab_tween
+	_tab_tween.tween_callback(func():
+		if _tab_tween == ultimo:
+			tabella.visible = false)
+	return durata
+
+## la tabella resta appoggiata al bordo inferiore, qualunque sia la sua altezza
+func _sistema_tabella() -> void:
+	var h := tabella.get_combined_minimum_size().y
+	tabella.offset_bottom = -12
+	tabella.offset_top = -12 - h
+
+## cella della tabella: [contenitore, stile, etichetta]
+func _cella(testo: String, fondo: Color, inchiostro: Color) -> Array:
+	var pc := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = fondo
+	sb.content_margin_left = 4
+	sb.content_margin_right = 4
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	pc.add_theme_stylebox_override("panel", sb)
+	pc.custom_minimum_size = Vector2(62, 26)
+	pc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var l := _etichetta(testo, 15, F_NUMERI, inchiostro)
+	l.autowrap_mode = TextServer.AUTOWRAP_OFF
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pc.add_child(l)
+	return [pc, sb, l]
+
 ## freccia lungo la rotta navale (se trovata), altrimenti una curva diretta
 func _freccia_mare(da: String, a: String, col: Color, spessore: float) -> void:
 	var rotta: Array = vista.rotta_mare(da, a) if da != "USA" else []
@@ -715,6 +923,13 @@ func _dopo_decisione(d: Dictionary, res: Dictionary, prima := {}) -> void:
 	vista.aggiorna(m.s, true)
 	if res.get("ok", false):
 		_frecce_decisione(d, res, prima)
+		if t == "attacca" and res.has("risultato"):
+			_tabella_combattimento(res["risultato"])
+	# logoramento: avviene passando al combattimento, si riconosce dal contatore
+	var ul: Dictionary = m.s.get("ultimo_logoramento", {})
+	if int(ul.get("n", 0)) > _ultimo_log_visto:
+		_ultimo_log_visto = int(ul.get("n", 0))
+		_tabella_logoramento(ul)
 	if t == "attacca" and res.has("risultato"):
 		var r: Dictionary = res["risultato"]
 		var testo: String = r.get("testo", "")

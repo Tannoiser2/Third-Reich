@@ -1084,6 +1084,14 @@ func _porti_e_coste_raggiungibili(da: String, passi: int, n := "") -> Array:
 			coda.append(v)
 	var out := {}
 	var attraversati := {da: true}
+	# dal porto di partenza si raggiungono anche i mari dietro un esagono di terra amico
+	if n != "" and D.porti.has(da):
+		for c in D.esagoni[da]["vicini"]:
+			if D.esagoni[c]["t"] != 9 and D.terra(c) and amico(n, controllo(c)) and not nemici_in(c, n):
+				for e in D.esagoni[c]["vicini"]:
+					if D.esagoni[e]["t"] == 9 and not dist.has(e):
+						dist[e] = 2
+						coda.append(e)
 	# si parte da un porto-passaggio: anche i suoi mari aggiuntivi
 	if n != "" and PASSAGGI.has(da):
 		for c in PASSAGGI[da]:
@@ -1640,6 +1648,14 @@ func _controlli_resa(fine_turno := false) -> void:
 	else:
 		_controlla_resa("ITA", "Rome")
 		_controlla_resa("GER", "Berlin")
+		# la Francia cade appena l'Asse occupa Parigi con le sue truppe alla fine del proprio turno
+		if not s["pot"]["FRA"]["arresa"] and attiva("FRA"):
+			var parigi := _id_citta("Paris")
+			if lato(controllo(parigi)) == "asse":
+				for x in terrestri_in(parigi):
+					if lato(s["u"][x]["n"]) == "asse":
+						_resa("FRA")
+						break
 	if l == "alleati" and not s["pot"]["URSS"]["arresa"] and attiva("URSS"):
 		var mosca := lato(controllo(_id_citta("Moscow"))) == "asse"
 		var altre := 0

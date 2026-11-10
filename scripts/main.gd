@@ -420,7 +420,7 @@ func _mostra_regole() -> void:
 
 [b]Rifornimenti.[/b] Le unità devono collegarsi via terra a città della patria, capitali o porti amici. Le unità isolate per due turni consecutivi sono eliminate.
 
-[b]Conquiste.[/b] Un paese cade quando il nemico ne prende la capitale. La Francia arresa lascia la Francia di Vichy, neutrale. L'Italia si arrende se cade Roma, l'URSS se cadono Mosca e due fra Leningrado, Stalingrado, Kharkov e Kiev.
+[b]Conquiste.[/b] Un paese cade quando il nemico ne prende la capitale; la Francia si arrende appena le truppe dell'Asse occupano Parigi alla fine del turno dell'Asse. La Francia arresa lascia la Francia di Vichy, neutrale. L'Italia si arrende se cade Roma, l'URSS se cadono Mosca e due fra Leningrado, Stalingrado, Kharkov e Kiev.
 
 [b]Advanced.[/b] In primavera ogni schieramento distribuisce i punti diplomatici sui paesi neutrali (2 dadi più la differenza dei punti: con risultati alti il paese si schiera con l'Asse, con risultati bassi, dal 1942, con gli Alleati). Inverno russo, perdita di BRP senza Ploesti, sommergibili e bombardamenti, aiuti americani all'URSS.
 
